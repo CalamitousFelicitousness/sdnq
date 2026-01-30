@@ -1,13 +1,12 @@
-from typing import Tuple, Optional, Iterator
+from typing import Iterator, Optional, Tuple
 
 import torch
 
-from ..training import SDNQTensor
 from ..common import compile_func
-
-from .optimizer import SDNQOptimizer
-from .utils import lerp_buffer_stochastic_, apply_norm_to_update_
+from ..training import SDNQTensor
 from .adafactor import approx_sq_grad
+from .optimizer import SDNQOptimizer
+from .utils import apply_norm_to_update_, lerp_buffer_stochastic_
 
 
 class CAME(SDNQOptimizer):
@@ -51,11 +50,11 @@ class CAME(SDNQOptimizer):
         return update_func(
             grad=grad,
             param=param_fp32,
-            exp_avg_sq_row=state.get("exp_avg_sq_row", None),
-            exp_avg_sq_col=state.get("exp_avg_sq_col", None),
-            exp_avg_res_row=state.get("exp_avg_res_row", None),
-            exp_avg_res_col=state.get("exp_avg_res_col", None),
-            exp_avg_sq=state.get("exp_avg_sq", None),
+            exp_avg_sq_row=state.get("exp_avg_sq_row"),
+            exp_avg_sq_col=state.get("exp_avg_sq_col"),
+            exp_avg_res_row=state.get("exp_avg_res_row"),
+            exp_avg_res_col=state.get("exp_avg_res_col"),
+            exp_avg_sq=state.get("exp_avg_sq"),
             exp_avg=state["exp_avg"],
             step=state["step"],
             betas=group["betas"],

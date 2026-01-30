@@ -4,13 +4,12 @@ from typing import List
 
 import torch
 
-from ...common import compile_func, int_mm_func # noqa: TID252
-from ...packed_int import unpack_int_symetric # noqa: TID252
-from ...dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias # noqa: TID252
-
+from ...common import compile_func, int_mm_func
+from ...dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias
+from ...packed_int import unpack_int_symetric
+from ..linear.forward import check_mats
+from ..linear.linear_int8 import quantize_int_mm_input
 from .forward import get_conv_args, process_conv_input
-from ..linear.linear_int8 import quantize_int_mm_input # noqa: TID252
-from ..linear.forward import check_mats # noqa: TID252
 
 
 def conv_int8_matmul(

@@ -4,11 +4,10 @@ import torch
 
 from ....common import compile_func, fp_mm_func, use_contiguous_mm
 from ....dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias
-from ...tensor import SDNQTensor # noqa: TID252
-
+from ...tensor import SDNQTensor
 from .forward import check_mats, quantized_linear_with_backward
-from .linear_fp16_dynamic import fp16_matmul_dynamic
 from .linear_fp8_tensorwise import quantize_fp_mm_input_tensorwise
+from .linear_fp16_dynamic import fp16_matmul_dynamic
 
 
 def fp16_matmul(

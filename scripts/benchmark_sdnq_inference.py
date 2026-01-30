@@ -1,6 +1,6 @@
+import time
 from typing import Optional, Union
 
-import time
 import torch
 from tqdm import tqdm
 
@@ -21,7 +21,7 @@ def benchmark_linear(name: str, linear: torch.nn.Linear, x: torch.Tensor, steps:
         z = linear(x)
         sync_func()
         t0 = time.time()
-        for i in tqdm(range(steps)):
+        for _i in tqdm(range(steps)):
             z = linear(x)
             sync_func()
         t1 = time.time()
@@ -188,7 +188,7 @@ def main(
     sdnq_float_fp8_e4fnuz_svd_tflops = benchmark_linear("SDNQ Float FP8 E4 FNUZ SVD", sdnq_quantize_layer(torch.nn.Linear(k,n, bias=True).to(device, dtype=dtype), weights_dtype="float8_e4m3fnuz", torch_dtype=dtype, use_quantized_matmul=False, use_svd=True)[0], x, steps)
     sdnq_float_fp8_e5fnuz_svd_tflops = benchmark_linear("SDNQ Float FP8 E5 FNUZ SVD", sdnq_quantize_layer(torch.nn.Linear(k,n, bias=True).to(device, dtype=dtype), weights_dtype="float8_e5m2fnuz", torch_dtype=dtype, use_quantized_matmul=False, use_svd=True)[0], x, steps)
 
-    print("")
+    print()
     print("==================================================")
     print("GPU:", getattr(torch, torch.device(device).type).get_device_name(device))
     print("Steps:", steps, "| MNK:", round((m*n*k)**(1/3)), "| Float:", dtype)
@@ -308,7 +308,7 @@ def main(
     print("SDNQ Float FP8 E4 FNUZ SVD TFLOPS:", sdnq_float_fp8_e4fnuz_svd_tflops)
     print("SDNQ Float FP8 E5 FNUZ SVD TFLOPS:", sdnq_float_fp8_e5fnuz_svd_tflops)
     print("==================================================")
-    print("")
+    print()
 
 
 if __name__ == "__main__":

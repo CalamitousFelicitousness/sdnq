@@ -2,7 +2,7 @@
 
 from typing import Callable
 
-from .common import dtype_dict, conv_types, conv_transpose_types, use_tensorwise_fp8_matmul
+from .common import conv_transpose_types, conv_types, dtype_dict, use_tensorwise_fp8_matmul
 
 
 def get_forward_func(layer_class_name: str, quantized_matmul_dtype: str, use_quantized_matmul: bool) -> Callable: # pylint: disable=inconsistent-return-statements

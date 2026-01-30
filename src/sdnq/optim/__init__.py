@@ -1,16 +1,15 @@
-from .optimizer import SDNQOptimizer
 from .adafactor import Adafactor
 from .adamw import AdamW
 from .came import CAME
 from .lion import Lion
 from .muon import Muon
-
+from .optimizer import SDNQOptimizer
 
 __all__ = [
-    "SDNQOptimizer",
+    "CAME",
     "Adafactor",
     "AdamW",
-    "CAME",
     "Lion",
     "Muon",
+    "SDNQOptimizer",
 ]

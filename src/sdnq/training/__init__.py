@@ -1,14 +1,13 @@
+import copy
 from typing import Dict, List, Optional
 
-import copy
 import torch
 
-from ..quantizer import SDNQConfig, QuantizationMethod, check_param_name_in, get_minimum_dtype, add_module_skip_keys
-from ..loader import apply_sdnq_options_to_model
-from ..common import linear_types, check_torch_compile
-from ..layers import SDNQLayer, get_sdnq_wrapper_class
-
+from ..common import check_torch_compile, linear_types
 from ..forward import get_forward_func as get_sdnq_forward_func
+from ..layers import SDNQLayer, get_sdnq_wrapper_class
+from ..loader import apply_sdnq_options_to_model
+from ..quantizer import QuantizationMethod, SDNQConfig, add_module_skip_keys, check_param_name_in, get_minimum_dtype
 from .forward import get_forward_func
 from .tensor import SDNQTensor
 

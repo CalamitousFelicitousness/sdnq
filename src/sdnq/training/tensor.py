@@ -1,12 +1,12 @@
-from typing import Any, Dict, List, Tuple, Optional
-
 import copy
-import torch
-from torch.utils._python_dispatch import return_and_correct_aliasing
-from torch._guards import detect_fake_mode
+from typing import Any, Dict, List, Optional, Tuple
 
-from ..quantizer import sdnq_quantize_layer_weight, sdnq_quantize_layer_weight_compiled
+import torch
+from torch._guards import detect_fake_mode
+from torch.utils._python_dispatch import return_and_correct_aliasing
+
 from ..dequantizer import SDNQDequantizer
+from ..quantizer import sdnq_quantize_layer_weight, sdnq_quantize_layer_weight_compiled
 
 
 class SDNQTensor(torch.Tensor):
@@ -53,10 +53,10 @@ class SDNQTensor(torch.Tensor):
 
     @classmethod
     def __tensor_unflatten__(cls, tensor_data_dict: Dict[str, torch.Tensor], sdnq_dequantizer: SDNQDequantizer, outer_size=None, outer_stride=None):
-        return SDNQTensor(tensor_data_dict["weight"], tensor_data_dict["scale"], tensor_data_dict.get("zero_point", None), tensor_data_dict.get("svd_up", None), tensor_data_dict.get("svd_down", None), sdnq_dequantizer)
+        return SDNQTensor(tensor_data_dict["weight"], tensor_data_dict["scale"], tensor_data_dict.get("zero_point"), tensor_data_dict.get("svd_up"), tensor_data_dict.get("svd_down"), sdnq_dequantizer)
 
     def __repr__(self):
-        return f"SDNQTensor(weight={repr(self.weight)}, scale={repr(self.scale)}, zero_point={repr(self.zero_point)}, svd_up={repr(self.svd_up)}, svd_down={repr(self.svd_down)}), sdnq_dequantizer={repr(self.sdnq_dequantizer)}"
+        return f"SDNQTensor(weight={self.weight!r}, scale={self.scale!r}, zero_point={self.zero_point!r}, svd_up={self.svd_up!r}, svd_down={self.svd_down!r}), sdnq_dequantizer={self.sdnq_dequantizer!r}"
 
     @staticmethod
     def from_float(
@@ -114,7 +114,7 @@ class SDNQTensor(torch.Tensor):
         if kwargs is None:
             kwargs = {}
         if func not in op_implementations_dict:
-            raise AssertionError(f"SDNQTensor does not yet support op: {str(func)}")
+            raise AssertionError(f"SDNQTensor does not yet support op: {func!s}")
         return op_implementations_dict[func](func, *args, **kwargs)
 
     def fsdp_pre_all_gather(self, mesh, outer_size=None, outer_stride=None, module=None, mp_policy=None):
@@ -213,7 +213,7 @@ def sdnq_generic_quantized(func, input, *args, **kwargs):
                 use_stochastic_rounding=sdnq_dequantizer.use_stochastic_rounding,
                 dequantize_fp32=input.scale.dtype == torch.float32,
                 skip_sr=True,
-            ) 
+            )
             for tensor in result
         )
     else:

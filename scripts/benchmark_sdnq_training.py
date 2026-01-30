@@ -1,32 +1,28 @@
-from typing import Optional, Union, Callable
-
 import time
+from typing import Callable, Optional, Union
+
 import torch
 from tqdm import tqdm
 
 import sdnq.common
 from sdnq.training import SDNQTensor
 from sdnq.training.layers.linear.forward import quantized_linear_with_backward
-
-from sdnq.training.layers.linear.linear_int8 import int8_matmul_with_backward
-from sdnq.training.layers.linear.linear_int8_ckpt import int8_matmul_with_backward_ckpt
-from sdnq.training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic_with_backward
-from sdnq.training.layers.linear.linear_int8_dynamic_ckpt import int8_matmul_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp8 import fp8_matmul_with_backward
 from sdnq.training.layers.linear.linear_fp8_ckpt import fp8_matmul_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp8_dynamic import fp8_matmul_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp8_dynamic_ckpt import fp8_matmul_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp8_tensorwise import fp8_matmul_tensorwise_with_backward
 from sdnq.training.layers.linear.linear_fp8_tensorwise_ckpt import fp8_matmul_tensorwise_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp8_tensorwise_dynamic import fp8_matmul_tensorwise_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp8_tensorwise_dynamic_ckpt import fp8_matmul_tensorwise_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp16 import fp16_matmul_with_backward
 from sdnq.training.layers.linear.linear_fp16_ckpt import fp16_matmul_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp16_dynamic import fp16_matmul_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp16_dynamic_ckpt import fp16_matmul_dynamic_with_backward_ckpt
+from sdnq.training.layers.linear.linear_int8 import int8_matmul_with_backward
+from sdnq.training.layers.linear.linear_int8_ckpt import int8_matmul_with_backward_ckpt
+from sdnq.training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic_with_backward
+from sdnq.training.layers.linear.linear_int8_dynamic_ckpt import int8_matmul_dynamic_with_backward_ckpt
 
 
 def get_tflops(it_s: float, m: int, n: int, k: int) -> float:
@@ -43,7 +39,7 @@ def benchmark_linear(name: str, linear: Callable, x: torch.Tensor, y: torch.Tens
         loss.backward()
         sync_func()
         t0 = time.time()
-        for i in tqdm(range(steps)):
+        for _i in tqdm(range(steps)):
             z = linear(x, y, b)
             loss = z.mean()
             loss.backward()
@@ -209,7 +205,7 @@ def main(
         print("Torch Compile is disabled, skipping quantized matmul tests.")
 
 
-    print("")
+    print()
     print("==================================================")
     print("GPU:", getattr(torch, torch.device(device).type).get_device_name(device))
     print("Steps:", steps, "| MNK:", round((m*n*k)**(1/3)), "| Float:", dtype)
@@ -304,7 +300,7 @@ def main(
         print("SDNQ FP16 Dynamic CKPT INT8 TFLOPS:", sdnq_fp16_dyn_ckpt_int8_tflops)
         print("SDNQ FP16 Dynamic CKPT FP8 TFLOPS:", sdnq_fp16_dyn_ckpt_fp8_tflops)
     print("==================================================")
-    print("")
+    print()
 
 
 if __name__ == "__main__":

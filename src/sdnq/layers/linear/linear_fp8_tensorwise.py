@@ -4,10 +4,9 @@ from typing import Tuple
 
 import torch
 
-from ...common import compile_func # noqa: TID252
-from ...packed_float import unpack_float # noqa: TID252
-from ...dequantizer import quantize_fp_mm, dequantize_symmetric, dequantize_symmetric_with_bias # noqa: TID252
-
+from ...common import compile_func
+from ...dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias, quantize_fp_mm
+from ...packed_float import unpack_float
 from .forward import check_mats
 
 

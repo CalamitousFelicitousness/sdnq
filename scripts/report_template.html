@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDNQ Quantization Sensitivity Report</title>
+<style>
+:root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --text: #e0e0e0;
+    --text-dim: #8899aa;
+    --accent: #0f3460;
+    --border: #2a2a4a;
+    --green: #2d6a4f;
+    --green-light: #40916c;
+    --yellow: #e9c46a;
+    --orange: #e76f51;
+    --red: #d62828;
+    --code-bg: #0d1117;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.25rem;
+    color: #ffffff;
+}
+
+.subtitle {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+}
+
+/* Stats Card */
+.stats-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.stats-row:last-child { margin-bottom: 0; }
+
+.stat-item {
+    font-size: 0.9rem;
+}
+
+.stat-label {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.stat-value {
+    font-weight: 600;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.badge-ok { background: var(--green); color: #fff; }
+.badge-promote { background: var(--orange); color: #1a1a2e; }
+.badge-skip { background: var(--red); color: #fff; }
+
+.nmse-stats {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+}
+
+/* Chart */
+.chart-section {
+    margin-bottom: 2rem;
+}
+
+.chart-section img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+/* Tables */
+.table-section {
+    margin-bottom: 2rem;
+    overflow-x: auto;
+}
+
+.section-title {
+    font-size: 1.2rem;
+    margin-bottom: 0.75rem;
+    color: #ffffff;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+thead th {
+    background: var(--accent);
+    color: #ffffff;
+    padding: 0.6rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    white-space: nowrap;
+}
+
+thead th.num { text-align: right; }
+
+tbody td {
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+tbody td.num {
+    text-align: right;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.82rem;
+}
+
+tbody td.layer-name {
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.82rem;
+}
+
+tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+tbody tr:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.nmse-cell {
+    padding: 0.3rem 0.5rem;
+    border-radius: 3px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.82rem;
+    text-align: right;
+    display: inline-block;
+    min-width: 5rem;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.status-ok { background: var(--green); color: #fff; }
+.status-promote { background: var(--orange); color: #1a1a2e; }
+.status-skip { background: var(--red); color: #fff; }
+
+.improvement-pos { color: #52b788; }
+.improvement-neg { color: var(--red); }
+.improvement-na { color: var(--text-dim); }
+
+/* Config Snippet */
+.config-section {
+    margin-bottom: 2rem;
+}
+
+.code-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    overflow-x: auto;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #c9d1d9;
+    white-space: pre;
+}
+
+.code-block .comment { color: #8b949e; }
+.code-block .string { color: #a5d6ff; }
+.code-block .keyword { color: #ff7b72; }
+
+/* Print styles */
+@media print {
+    :root {
+        --bg: #ffffff;
+        --surface: #f5f5f5;
+        --text: #1a1a1a;
+        --text-dim: #555555;
+        --accent: #e0e0e0;
+        --border: #cccccc;
+        --code-bg: #f6f8fa;
+    }
+
+    body {
+        background: #ffffff;
+        color: #1a1a1a;
+        padding: 1rem;
+    }
+
+    h1 { color: #1a1a1a; }
+    .section-title { color: #1a1a1a; }
+
+    thead th {
+        background: #e0e0e0;
+        color: #1a1a1a;
+    }
+
+    .code-block {
+        background: #f6f8fa;
+        color: #1a1a1a;
+        border-color: #cccccc;
+    }
+    .code-block .comment { color: #6a737d; }
+    .code-block .string { color: #032f62; }
+    .code-block .keyword { color: #d73a49; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>SDNQ Quantization Sensitivity Report</h1>
+<p class="subtitle">{{ model_id }} &mdash; {{ timestamp }}</p>
+
+<!-- Stats Card -->
+<div class="stats-card">
+    <div class="stats-row">
+        <div class="stat-item">
+            <div class="stat-label">Layers Analyzed</div>
+            <div class="stat-value">{{ stats.total_layers }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Total Parameters</div>
+            <div class="stat-value">{{ "{:,}".format(stats.total_params) }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Primary Dtype</div>
+            <div class="stat-value">{{ primary_dtype }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">SVD</div>
+            <div class="stat-value">{{ "on" if use_svd_filter else "off" }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Thresholds</div>
+            <div class="stat-value">skip={{ skip_threshold }}, promote={{ promote_threshold }}</div>
+        </div>
+    </div>
+    <div class="stats-row">
+        <div><span class="badge badge-ok">OK {{ stats.ok_count }} ({{ "%.1f"|format(stats.ok_pct) }}%)</span></div>
+        <div><span class="badge badge-promote">PROMOTE {{ stats.promote_count }} ({{ "%.1f"|format(stats.promote_pct) }}%)</span></div>
+        <div><span class="badge badge-skip">SKIP {{ stats.skip_count }} ({{ "%.1f"|format(stats.skip_pct) }}%)</span></div>
+    </div>
+    <div class="stats-row">
+        <div class="nmse-stats">
+            NMSE @ {{ primary_dtype }}:
+            mean={{ stats.mean_nmse }}
+            &nbsp; median={{ stats.median_nmse }}
+            &nbsp; worst={{ stats.worst_nmse }}
+        </div>
+    </div>
+    {% if svd_summary %}
+    <div class="stats-row" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+        <div class="stat-item">
+            <div class="stat-label">SVD vs Raw</div>
+            <div class="stat-value">{{ svd_summary.total_compared }} layers compared</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Mean NMSE</div>
+            <div class="nmse-stats">raw={{ svd_summary.raw_mean_nmse }} &rarr; svd={{ svd_summary.svd_mean_nmse }} ({{ svd_summary.mean_change_pct }})</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Median NMSE</div>
+            <div class="nmse-stats">raw={{ svd_summary.raw_median_nmse }} &rarr; svd={{ svd_summary.svd_median_nmse }} ({{ svd_summary.median_change_pct }})</div>
+        </div>
+    </div>
+    <div class="stats-row">
+        <div class="stat-item">
+            <div class="stat-label">Layers</div>
+            <div class="stat-value">
+                <span style="color: var(--green-light);">{{ svd_summary.improved }} improved</span>
+                &nbsp;
+                <span style="color: var(--red);">{{ svd_summary.harmed }} harmed</span>
+                &nbsp;
+                <span style="color: var(--text-dim);">{{ svd_summary.unchanged }} unchanged</span>
+            </div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Verdict</div>
+            <div class="stat-value">
+                {% if svd_summary.verdict == "beneficial" %}
+                <span class="badge badge-ok">SVD beneficial</span>
+                {% elif svd_summary.verdict == "harmful" %}
+                <span class="badge badge-skip">SVD harmful</span>
+                {% else %}
+                <span class="badge badge-promote">Mixed results</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% if size_stats %}
+    <div class="stats-row" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+        <div class="stat-item">
+            <div class="stat-label">FP16 Baseline</div>
+            <div class="stat-value">{{ size_stats.fp16_total_display }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Uniform ({{ size_stats.uniform_dtype }} g{{ size_stats.uniform_gs }})</div>
+            <div class="stat-value">{{ size_stats.uniform_total_display }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Recommended</div>
+            <div class="stat-value" style="color: var(--green-light);">{{ size_stats.recommended_total_display }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Savings</div>
+            <div class="stat-value">{{ size_stats.savings_vs_fp16_pct }}% vs FP16 &middot; {{ size_stats.savings_vs_uniform_pct }}% vs uniform</div>
+        </div>
+    </div>
+    {% if size_stats.per_component and size_stats.per_component|length > 1 %}
+    <div class="stats-row" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+        <div class="stat-item" style="width:100%;">
+            <div class="stat-label">Per-Component Breakdown</div>
+            <div class="stat-value">
+                {% for subfolder, cs in size_stats.per_component.items() %}
+                <div style="margin-top:0.25rem;">
+                    <strong>{{ subfolder }}</strong>: {{ cs.recommended_total_display }}
+                    ({{ cs.savings_vs_fp16_pct }}% vs FP16, {{ cs.ok_count }} OK / {{ cs.skip_count }} SKIP)
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+    {% if rank_distribution %}
+    <div class="stats-row" style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+        <div class="stat-item">
+            <div class="stat-label">SVD Rank Distribution</div>
+            <div class="stat-value">
+                {% for label, count in rank_distribution %}
+                {{ label }}: {{ count }}{{ ", " if not loop.last else "" }}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Chart -->
+{% if chart_base64 %}
+<div class="chart-section">
+    <h2 class="section-title">NMSE Distribution (Top Layers)</h2>
+    <img src="data:image/png;base64,{{ chart_base64 }}" alt="NMSE bar chart">
+</div>
+{% endif %}
+
+<!-- Heatmap / Auto-Config Table -->
+{% if column_mode == "auto_config" %}
+{% set multi_comp = size_stats and size_stats.per_component and size_stats.per_component|length > 1 %}
+<div class="table-section">
+    <h2 class="section-title">Per-Layer Optimal Configuration ({{ classified_rows|length }} layers)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">#</th>
+                {% if multi_comp %}<th>Comp</th>{% endif %}
+                <th>Layer</th>
+                <th>Shape</th>
+                <th>Rec.Dtype</th>
+                <th class="num">GroupSize</th>
+                <th>SVD</th>
+                <th class="num">NMSE</th>
+                <th class="num">Est.Size</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in classified_rows %}
+            <tr>
+                <td class="num">{{ row.rank }}</td>
+                {% if multi_comp %}<td>{{ row.component.split(":")[0] if row.component else "" }}</td>{% endif %}
+                <td class="layer-name" title="{{ row.param_name }}">{{ row.truncated_name }}</td>
+                <td>{{ row.shape }}</td>
+                <td>{{ row.rec_dtype }}</td>
+                <td class="num">{{ row.rec_group_size }}</td>
+                <td>{{ row.rec_svd_rank if row.rec_svd else "no" }}</td>
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.nmse_bg }};color:{{ row.nmse_fg }}">
+                        {{ row.rec_nmse_display }}
+                    </span>
+                </td>
+                <td class="num">{{ row.rec_size_display }}</td>
+                <td>
+                    {% if row.status == "SKIP" %}
+                    <span class="status-badge status-skip">SKIP</span>
+                    {% else %}
+                    <span class="status-badge status-ok">OK</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="table-section">
+    <h2 class="section-title">Top {{ classified_rows|length }} Most Sensitive Layers (by {{ primary_dtype }} NMSE)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">#</th>
+                <th>Layer</th>
+                <th>Class</th>
+                <th>Shape</th>
+                <th class="num">Kurtosis</th>
+                {% for d in dtypes %}
+                <th class="num">{{ d }}</th>
+                {% endfor %}
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in classified_rows %}
+            <tr>
+                <td class="num">{{ row.rank }}</td>
+                <td class="layer-name" title="{{ row.param_name }}">{{ row.truncated_name }}</td>
+                <td>{{ row.layer_class }}</td>
+                <td>{{ row.shape }}</td>
+                <td class="num">{{ row.kurtosis }}</td>
+                {% for d in dtypes %}
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.nmse_by_column[d].bg_color }};color:{{ row.nmse_by_column[d].text_color }}">
+                        {{ row.nmse_by_column[d].display }}
+                    </span>
+                </td>
+                {% endfor %}
+                <td>
+                    {% if row.status == "SKIP" %}
+                    <span class="status-badge status-skip">SKIP</span>
+                    {% elif row.status == "OK" %}
+                    <span class="status-badge status-ok">OK</span>
+                    {% else %}
+                    <span class="status-badge status-promote">{{ row.status }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- SVD Comparison -->
+{% if svd_comparison %}
+<div class="table-section">
+    <h2 class="section-title">SVD vs Raw Comparison @ {{ primary_dtype }}</h2>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">#</th>
+                <th>Layer</th>
+                <th class="num">Raw NMSE</th>
+                <th class="num">SVD NMSE</th>
+                <th class="num">Improvement</th>
+                <th class="num">Raw SQNR</th>
+                <th class="num">SVD SQNR</th>
+                <th class="num">SQNR Gain</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in svd_comparison %}
+            <tr>
+                <td class="num">{{ loop.index }}</td>
+                <td class="layer-name" title="{{ row.param_name }}">{{ row.truncated_name }}</td>
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.raw_bg }};color:{{ row.raw_fg }}">{{ row.raw_nmse }}</span>
+                </td>
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.svd_bg }};color:{{ row.svd_fg }}">{{ row.svd_nmse }}</span>
+                </td>
+                <td class="num {% if row.improvement_pct != 'N/A' %}{{ 'improvement-pos' if row.improvement_positive else 'improvement-neg' }}{% else %}improvement-na{% endif %}">
+                    {{ row.improvement_pct }}
+                </td>
+                <td class="num">{{ row.raw_sqnr }}</td>
+                <td class="num">{{ row.svd_sqnr }}</td>
+                <td class="num {% if row.sqnr_gain != 'N/A' %}{{ 'improvement-pos' if row.sqnr_gain_positive else 'improvement-neg' }}{% else %}improvement-na{% endif %}">
+                    {{ row.sqnr_gain }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Rank-vs-Rank Comparison -->
+{% if rank_comparison %}
+<div class="table-section">
+    <h2 class="section-title">SVD Rank Comparison @ {{ primary_dtype }} (top {{ rank_comparison|length }} layers)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th class="num">#</th>
+                <th>Layer</th>
+                {% for rk in rank_comparison_ranks %}
+                <th class="num">rank={{ rk }}</th>
+                {% endfor %}
+                <th class="num">Best</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rank_comparison %}
+            <tr>
+                <td class="num">{{ loop.index }}</td>
+                <td class="layer-name" title="{{ row.param_name }}">{{ row.truncated_name }}</td>
+                {% for rk in rank_comparison_ranks %}
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.nmse_by_rank[rk].bg_color }};color:{{ row.nmse_by_rank[rk].text_color }}">
+                        {{ row.nmse_by_rank[rk].display }}
+                    </span>
+                </td>
+                {% endfor %}
+                <td class="num" style="font-weight:600;">{{ row.best_rank if row.best_rank is not none else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Config Snippet -->
+<div class="config-section">
+    <h2 class="section-title">SDNQ Config Snippet</h2>
+    {% if config_snippets_html and config_snippets_html|length > 1 %}
+    {% for comp, snippet_html in config_snippets_html.items() %}
+    <h3 class="section-title" style="font-size:1rem; margin-top:1.5rem;">{{ comp.split(":")[0] }} ({{ comp.split(":")[1] if ":" in comp else comp }})</h3>
+    <div class="code-block">{{ snippet_html }}</div>
+    {% endfor %}
+    {% else %}
+    <div class="code-block">{{ config_snippet_html }}</div>
+    {% endif %}
+</div>
+
+</div>
+</body>
+</html>

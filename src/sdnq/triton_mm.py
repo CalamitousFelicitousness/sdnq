@@ -6,7 +6,6 @@ PyTorch doesn't support FP32 output type with FP16 MM so we use Triton for it to
 """
 
 import torch
-
 import triton
 import triton.language as tl
 

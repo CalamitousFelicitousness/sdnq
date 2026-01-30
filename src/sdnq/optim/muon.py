@@ -1,18 +1,16 @@
-from typing import Callable, Tuple, Optional, Iterator
+from typing import Callable, Iterator, Optional, Tuple
 
 import torch
 
-from ..training import SDNQTensor
 from ..common import compile_func, use_tensorwise_fp8_matmul
-
-from ..training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic
+from ..training import SDNQTensor
 from ..training.layers.linear.linear_fp8_dynamic import fp8_matmul_dynamic
 from ..training.layers.linear.linear_fp8_tensorwise_dynamic import fp8_matmul_tensorwise_dynamic
 from ..training.layers.linear.linear_fp16_dynamic import fp16_matmul_dynamic
-
+from ..training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic
+from .adamw import adam_update, adam_update_compiled
 from .optimizer import SDNQOptimizer
 from .utils import lerp_buffer_stochastic_
-from .adamw import adam_update, adam_update_compiled
 
 
 class Muon(SDNQOptimizer):
@@ -121,7 +119,7 @@ class Muon(SDNQOptimizer):
                 param=param_fp32,
                 grad=grad,
                 momentum_buffer=state["momentum_buffer"],
-                v_buffer=state.get("v_buffer", None),
+                v_buffer=state.get("v_buffer"),
                 step=state["step"],
                 betas=group["betas"],
                 clip=group["clip_threshold"][0],

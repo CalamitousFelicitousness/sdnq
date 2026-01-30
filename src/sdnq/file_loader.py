@@ -1,5 +1,6 @@
-import re
 import concurrent.futures
+import re
+
 import torch
 
 

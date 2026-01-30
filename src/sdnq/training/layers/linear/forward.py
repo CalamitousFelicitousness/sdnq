@@ -1,9 +1,9 @@
 from typing import Tuple, Union
 
 import torch
-from ....common import compile_func, use_contiguous_mm
 
-from ...tensor import SDNQTensor # noqa: TID252
+from ....common import compile_func, use_contiguous_mm
+from ...tensor import SDNQTensor
 
 
 def check_mats(input: torch.Tensor, weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

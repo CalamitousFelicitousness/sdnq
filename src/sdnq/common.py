@@ -1,9 +1,10 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
 import os
+
 import torch
 
-from .sdnext import shared, devices
+from .sdnext import devices, shared
 
 sdnq_version = "0.1.5"
 
@@ -237,9 +238,9 @@ if use_torch_compile:
     torch._dynamo.config.cache_size_limit = max(8192, getattr(torch._dynamo.config, "cache_size_limit", 0))
     torch._dynamo.config.accumulated_recompile_limit = max(8192, getattr(torch._dynamo.config, "accumulated_recompile_limit", 0))
     def compile_func(fn, **kwargs):
-        if kwargs.get("fullgraph", None) is None:
+        if kwargs.get("fullgraph") is None:
             kwargs["fullgraph"] = True
-        if kwargs.get("dynamic", None) is None:
+        if kwargs.get("dynamic") is None:
             kwargs["dynamic"] = False
         return torch.compile(fn, **kwargs)
 else:

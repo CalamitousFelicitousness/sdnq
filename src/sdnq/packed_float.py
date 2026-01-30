@@ -3,7 +3,6 @@ import torch
 from .common import dtype_dict
 from .packed_int import pack_int_asymetric, unpack_int_asymetric
 
-
 float_bits_to_uint_dict = {
     1: "uint1",
     2: "uint2",

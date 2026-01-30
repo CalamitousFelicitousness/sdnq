@@ -1,10 +1,9 @@
-from typing import Tuple, Iterator
+from typing import Iterator, Tuple
 
 import torch
 
-from ..training import SDNQTensor
 from ..common import compile_func
-
+from ..training import SDNQTensor
 from .optimizer import SDNQOptimizer
 from .utils import lerp_buffer_stochastic_
 

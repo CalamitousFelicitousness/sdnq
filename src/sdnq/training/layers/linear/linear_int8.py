@@ -1,13 +1,12 @@
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import torch
 
 from ....common import compile_func, int_mm_func, use_contiguous_mm
 from ....dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias, quantize_int_mm, quantize_int_mm_sr
-from ...tensor import SDNQTensor # noqa: TID252
-
-from .linear_int8_dynamic import int8_matmul_dynamic
+from ...tensor import SDNQTensor
 from .forward import check_mats, quantized_linear_with_backward
+from .linear_int8_dynamic import int8_matmul_dynamic
 
 try:
     from ....triton_mm import int_mm as triton_int_mm

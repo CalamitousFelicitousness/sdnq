@@ -1,12 +1,13 @@
-import os
 import json
+import os
+
 import torch
 from diffusers.models.modeling_utils import ModelMixin
 
-from .common import dtype_dict, use_tensorwise_fp8_matmul, check_torch_compile, conv_types, linear_types
-from .quantizer import SDNQConfig, sdnq_post_load_quant, prepare_weight_for_matmul, prepare_svd_for_matmul, get_quant_args_from_config
-from .forward import get_forward_func
+from .common import check_torch_compile, conv_types, dtype_dict, linear_types, use_tensorwise_fp8_matmul
 from .file_loader import load_files
+from .forward import get_forward_func
+from .quantizer import SDNQConfig, get_quant_args_from_config, prepare_svd_for_matmul, prepare_weight_for_matmul, sdnq_post_load_quant
 
 
 def get_module_names(model: ModelMixin) -> list:
@@ -82,14 +83,14 @@ def load_sdnq_model(model_path: str, model_cls: ModelMixin = None, file_name: st
                 with open(quantization_config_path, "r", encoding="utf-8") as f:
                     quantization_config = json.load(f)
             else:
-                quantization_config = model_config.get("quantization_config", None)
+                quantization_config = model_config.get("quantization_config")
                 if quantization_config is None:
                     raise ValueError(f"Cannot determine quantization_config for {model_path}, please provide quantization_config argument")
 
         if model_cls is None:
-            import transformers
             import diffusers
-            class_name = model_config.get("_class_name", None) or model_config.get("architectures", None)
+            import transformers
+            class_name = model_config.get("_class_name") or model_config.get("architectures")
             if isinstance(class_name, list):
                 class_name = class_name[0]
             if class_name is not None:
@@ -127,9 +128,8 @@ def load_sdnq_model(model_path: str, model_cls: ModelMixin = None, file_name: st
         # older transformers case, handle known models manually
         if model.__class__.__name__ in {"T5EncoderModel", "UMT5EncoderModel"} and "encoder.embed_tokens.weight" not in state_dict.keys():
             state_dict["encoder.embed_tokens.weight"] = state_dict["shared.weight"]
-        elif model.__class__.__name__ in {"Qwen3ForCausalLM"} and "lm_head.weight" not in state_dict.keys():
-            if "model.embed_tokens.weight" in state_dict.keys():
-                state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        elif model.__class__.__name__ in {"Qwen3ForCausalLM"} and "lm_head.weight" not in state_dict.keys() and "model.embed_tokens.weight" in state_dict.keys():
+            state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
 
     model.load_state_dict(state_dict, assign=True)
     del state_dict

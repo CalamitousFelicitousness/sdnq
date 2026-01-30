@@ -1,12 +1,11 @@
-from typing import Tuple, Optional, Iterator
+from typing import Iterator, Optional, Tuple
 
 import torch
 
-from ..training import SDNQTensor
 from ..common import compile_func
-
+from ..training import SDNQTensor
 from .optimizer import SDNQOptimizer
-from .utils import lerp_buffer_stochastic_, apply_norm_to_update_
+from .utils import apply_norm_to_update_, lerp_buffer_stochastic_
 
 
 class Adafactor(SDNQOptimizer):
@@ -51,10 +50,10 @@ class Adafactor(SDNQOptimizer):
         return update_func(
             param=param_fp32,
             grad=grad,
-            row_var=state.get("row_var", None),
-            col_var=state.get("col_var", None),
-            variance=state.get("variance", None),
-            exp_avg=state.get("exp_avg", None),
+            row_var=state.get("row_var"),
+            col_var=state.get("col_var"),
+            variance=state.get("variance"),
+            exp_avg=state.get("exp_avg"),
             step=state["step"],
             betas=group["betas"],
             clips=group["clip_threshold"],
