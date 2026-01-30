@@ -397,3 +397,21 @@ import sdnq
 from diffusers import DiffusionPipeline
 pipe = DiffusionPipeline.from_pretrained("/path/to/quantized")
 ```
+
+## Output-Level Validation
+
+To verify that a quantized pipeline produces acceptable output quality (not just per-layer weight error), use `scripts/benchmark_inference_quality.py`. It compares FP16 baseline and quantized pipeline outputs at two levels: per-step latent divergence and final image quality metrics (PSNR, SSIM, LPIPS).
+
+```bash
+# Compare against a pre-quantized pipeline
+python scripts/benchmark_inference_quality.py \
+    --model-id Tongyi-MAI/Z-Image \
+    --quantized-path /path/to/quantized
+
+# Or use the pipeline config for on-the-fly quantization
+python scripts/benchmark_inference_quality.py \
+    --model-id Tongyi-MAI/Z-Image \
+    --pipeline-config quant_sensitivity_report_pipeline_config.json
+```
+
+See `python scripts/benchmark_inference_quality.py --help` for full CLI reference.

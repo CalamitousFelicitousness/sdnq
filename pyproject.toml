@@ -21,6 +21,7 @@ dependencies = ["torch", "diffusers", "transformers", "accelerate"]
 [project.optional-dependencies]
 report = ["Jinja2", "matplotlib"]
 report-pdf = ["Jinja2", "matplotlib", "weasyprint"]
+quality = ["torchmetrics", "lpips"]
 
 [project.optional-dependencies.dev]
 ruff = ["ruff>=0.14"]

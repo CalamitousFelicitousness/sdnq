@@ -37,3 +37,5 @@ coverage.xml
 
 # Generated reports (analysis output, not source)
 quant_sensitivity_report*
+inference_quality_report*
+inference_quality_results/
