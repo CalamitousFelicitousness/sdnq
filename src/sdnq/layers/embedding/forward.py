@@ -2,10 +2,10 @@
 
 import torch
 
-from ...common import dtype_dict, compile_func # noqa: TID252
-from ...packed_int import unpack_int # noqa: TID252
-from ...packed_float import unpack_float # noqa: TID252
-from ...dequantizer import dequantize_symmetric, dequantize_asymmetric # noqa: TID252
+from ...common import compile_func, dtype_dict
+from ...dequantizer import dequantize_asymmetric, dequantize_symmetric
+from ...packed_float import unpack_float
+from ...packed_int import unpack_int
 
 
 def quantized_embedding(

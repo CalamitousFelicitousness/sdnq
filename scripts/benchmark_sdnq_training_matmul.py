@@ -1,32 +1,28 @@
+import time
 from collections.abc import Callable
 
-import time
 import torch
 from tqdm import tqdm
 
 import sdnq.common
 from sdnq.training import SDNQTensor
 from sdnq.training.layers.linear.forward import quantized_linear_with_backward
-
-from sdnq.training.layers.linear.linear_int8 import int8_matmul_with_backward
-from sdnq.training.layers.linear.linear_int8_ckpt import int8_matmul_with_backward_ckpt
-from sdnq.training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic_with_backward
-from sdnq.training.layers.linear.linear_int8_dynamic_ckpt import int8_matmul_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp8 import fp8_matmul_with_backward
 from sdnq.training.layers.linear.linear_fp8_ckpt import fp8_matmul_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp8_dynamic import fp8_matmul_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp8_dynamic_ckpt import fp8_matmul_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp8_tensorwise import fp8_matmul_tensorwise_with_backward
 from sdnq.training.layers.linear.linear_fp8_tensorwise_ckpt import fp8_matmul_tensorwise_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp8_tensorwise_dynamic import fp8_matmul_tensorwise_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp8_tensorwise_dynamic_ckpt import fp8_matmul_tensorwise_dynamic_with_backward_ckpt
-
 from sdnq.training.layers.linear.linear_fp16 import fp16_matmul_with_backward
 from sdnq.training.layers.linear.linear_fp16_ckpt import fp16_matmul_with_backward_ckpt
 from sdnq.training.layers.linear.linear_fp16_dynamic import fp16_matmul_dynamic_with_backward
 from sdnq.training.layers.linear.linear_fp16_dynamic_ckpt import fp16_matmul_dynamic_with_backward_ckpt
+from sdnq.training.layers.linear.linear_int8 import int8_matmul_with_backward
+from sdnq.training.layers.linear.linear_int8_ckpt import int8_matmul_with_backward_ckpt
+from sdnq.training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic_with_backward
+from sdnq.training.layers.linear.linear_int8_dynamic_ckpt import int8_matmul_dynamic_with_backward_ckpt
 
 
 def get_tflops(it_s: float, m: int, n: int, k: int) -> float:
@@ -43,7 +39,7 @@ def benchmark_linear(name: str, linear: Callable, x: torch.Tensor, y: torch.Tens
         loss.backward()
         sync_func(x.device)
         t0 = time.time()
-        for i in tqdm(range(steps)):
+        for _i in tqdm(range(steps)):
             z = linear(x, y, b)
             loss = z.mean()
             loss.backward()
@@ -93,7 +89,7 @@ def main(
         sdnq_fp8_tflops = benchmark_linear("SDNQ FP8", fp8_matmul_with_backward, x, SDNQTensor.from_float(y, weights_dtype="fp8", group_size=-1).requires_grad_(True), b, steps)
         sdnq_fp8_tw_tflops = benchmark_linear("SDNQ FP8 TW", fp8_matmul_tensorwise_with_backward, x, SDNQTensor.from_float(y, weights_dtype="fp8", group_size=-1).requires_grad_(True), b, steps)
         sdnq_fp16_tflops = benchmark_linear("SDNQ FP16", fp16_matmul_with_backward, x, SDNQTensor.from_float(y, weights_dtype="float16", group_size=-1).requires_grad_(True), b, steps)
-        
+
         sdnq_int8_dyn_float_tflops = benchmark_linear("SDNQ INT8 Dynamic Float", int8_matmul_dynamic_with_backward, x, y, b, steps)
         sdnq_fp8_dyn_float_tflops = benchmark_linear("SDNQ FP8 Dynamic Float", fp8_matmul_dynamic_with_backward, x, y, b, steps)
         sdnq_fp8_tw_dyn_float_tflops = benchmark_linear("SDNQ FP8 TW Dynamic Float", fp8_matmul_tensorwise_dynamic_with_backward, x, y, b, steps)
@@ -109,7 +105,7 @@ def main(
         sdnq_fp8_tw_dyn_ckpt_float_tflops = benchmark_linear("SDNQ FP8 TW Dynamic CKPT Float", fp8_matmul_tensorwise_dynamic_with_backward_ckpt, x, y, b, steps)
         sdnq_fp16_dyn_ckpt_float_tflops = benchmark_linear("SDNQ FP16 Dynamic CKPT Float", fp16_matmul_dynamic_with_backward_ckpt, x, y, b, steps)
 
-    print("")
+    print()
     print("==================================================")
     print("GPU:", getattr(torch, torch.device(device).type).get_device_name(device))
     print("Steps:", steps, "| MNK:", round((m*n*k)**(1/3)), "| Float:", dtype)
@@ -141,7 +137,7 @@ def main(
     print("SDNQ FP8 TW Dynamic CKPT Float TFLOPS:", sdnq_fp8_tw_dyn_ckpt_float_tflops)
     print("SDNQ FP16 Dynamic CKPT Float TFLOPS:", sdnq_fp16_dyn_ckpt_float_tflops)
     print("==================================================")
-    print("")
+    print()
 
 
 if __name__ == "__main__":

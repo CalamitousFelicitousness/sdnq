@@ -1,10 +1,11 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
-import os
 import json
+import os
+
 import torch
 
-from .sdnext import shared, devices
+from .sdnext import devices, shared
 
 sdnq_version = "0.1.8"
 
@@ -397,13 +398,12 @@ if use_torch_compile:
     torch._dynamo.config.cache_size_limit = max(8192, getattr(torch._dynamo.config, "cache_size_limit", 0))
     torch._dynamo.config.accumulated_recompile_limit = max(8192, getattr(torch._dynamo.config, "accumulated_recompile_limit", 0))
     def compile_func(fn, **kwargs):
-        if kwargs.get("fullgraph", None) is None:
+        if kwargs.get("fullgraph") is None:
             kwargs["fullgraph"] = True
-        if kwargs.get("dynamic", None) is None:
+        if kwargs.get("dynamic") is None:
             kwargs["dynamic"] = False
         if os.environ.get("SDNQ_COMPILE_KWARGS", None) is not None:
-            for key, value in json.loads(os.environ.get("SDNQ_COMPILE_KWARGS")).items():
-                kwargs[key] = value
+            kwargs.update(json.loads(os.environ.get("SDNQ_COMPILE_KWARGS")))
         return torch.compile(fn, **kwargs)
 else:
     def compile_func(fn, **kwargs): # pylint: disable=unused-argument

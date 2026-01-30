@@ -8,10 +8,8 @@ SDNQ Triton configs can outperform RocBLAS and OneDNN.
 """
 
 import torch
-
 import triton
 import triton.language as tl
-
 
 matmul_configs = [
     triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": GM}, num_warps=w, num_stages=s)
