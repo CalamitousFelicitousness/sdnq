@@ -1,26 +1,41 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
-from typing import Dict, List, Tuple, Optional, Union
+import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, List, Optional, Tuple, Union
 
-import re
 import torch
-
-from transformers.quantizers import HfQuantizer
+from accelerate import init_empty_weights
 from diffusers.quantizers.base import DiffusersQuantizer
 from diffusers.quantizers.quantization_config import QuantizationConfigMixin
-
 from diffusers.utils import get_module_from_name
-from accelerate import init_empty_weights
+from transformers.quantizers import HfQuantizer
 
-from .sdnext import devices, shared
-from .common import sdnq_version, dtype_dict, common_skip_keys, module_skip_keys_dict, accepted_weight_dtypes, accepted_matmul_dtypes, weights_dtype_order, weights_dtype_order_fp32, allowed_types, linear_types, conv_types, conv_transpose_types, compile_func, use_tensorwise_fp8_matmul, use_contiguous_mm, check_torch_compile
+from .common import (
+    accepted_matmul_dtypes,
+    accepted_weight_dtypes,
+    allowed_types,
+    check_torch_compile,
+    common_skip_keys,
+    compile_func,
+    conv_transpose_types,
+    conv_types,
+    dtype_dict,
+    linear_types,
+    module_skip_keys_dict,
+    sdnq_version,
+    use_contiguous_mm,
+    use_tensorwise_fp8_matmul,
+    weights_dtype_order,
+    weights_dtype_order_fp32,
+)
 from .dequantizer import SDNQDequantizer, dequantize_sdnq_model
-from .packed_int import pack_int_symetric, pack_int_asymetric
-from .packed_float import pack_float
 from .forward import get_forward_func
 from .layers import get_sdnq_wrapper_class
+from .packed_float import pack_float
+from .packed_int import pack_int_asymetric, pack_int_symetric
+from .sdnext import devices, shared
 
 
 class QuantizationMethod(str, Enum):
@@ -167,6 +182,22 @@ def get_minimum_dtype(weights_dtype: str, param_name: str, modules_dtype_dict: D
                 else:
                     return key
     return weights_dtype
+
+
+def get_layer_svd(use_svd, svd_rank, param_name, modules_svd_dict):
+    if modules_svd_dict:
+        for rank, layer_names in modules_svd_dict.items():
+            if check_param_name_in(param_name, layer_names):
+                return True, int(rank)
+    return use_svd, svd_rank
+
+
+def get_layer_group_size(param_name, modules_group_size_dict, default_group_size):
+    if modules_group_size_dict:
+        for gs, layer_names in modules_group_size_dict.items():
+            if check_param_name_in(param_name, layer_names):
+                return int(gs)
+    return default_group_size
 
 
 def add_module_skip_keys(model, modules_to_not_convert: List[str] = None, modules_dtype_dict: Dict[str, List[str]] = None):
@@ -528,7 +559,7 @@ def sdnq_quantize_layer(layer, weights_dtype="int8", quantized_matmul_dtype=None
 
 
 @devices.inference_context()
-def apply_sdnq_to_module(model, weights_dtype="int8", quantized_matmul_dtype=None, torch_dtype=None, group_size=0, svd_rank=32, svd_steps=8, dynamic_loss_threshold=1e-2, use_svd=False, quant_conv=False, use_quantized_matmul=False, use_quantized_matmul_conv=False, use_dynamic_quantization=False, use_stochastic_rounding=False, dequantize_fp32=False, non_blocking=False, modules_to_not_convert: List[str] = None, modules_dtype_dict: Dict[str, List[str]] = None, quantization_device=None, return_device=None, full_param_name=""): # pylint: disable=unused-argument
+def apply_sdnq_to_module(model, weights_dtype="int8", quantized_matmul_dtype=None, torch_dtype=None, group_size=0, svd_rank=32, svd_steps=8, dynamic_loss_threshold=1e-2, use_svd=False, quant_conv=False, use_quantized_matmul=False, use_quantized_matmul_conv=False, use_dynamic_quantization=False, use_stochastic_rounding=False, dequantize_fp32=False, non_blocking=False, modules_to_not_convert: List[str] = None, modules_dtype_dict: Dict[str, List[str]] = None, modules_svd_dict: Dict[int, List[str]] = None, modules_group_size_dict: Dict[int, List[str]] = None, quantization_device=None, return_device=None, full_param_name=""): # pylint: disable=unused-argument
     has_children = list(model.children())
     if not has_children:
         return model, modules_to_not_convert, modules_dtype_dict
@@ -549,16 +580,18 @@ def apply_sdnq_to_module(model, weights_dtype="int8", quantized_matmul_dtype=Non
             if layer_class_name in allowed_types and module.weight.dtype in {torch.float32, torch.float16, torch.bfloat16}:
                 if (layer_class_name in conv_types or layer_class_name in conv_transpose_types) and not quant_conv:
                     continue
+                layer_use_svd, layer_svd_rank = get_layer_svd(use_svd, svd_rank, param_name, modules_svd_dict)
+                layer_group_size = get_layer_group_size(param_name, modules_group_size_dict, group_size)
                 module, modules_to_not_convert, modules_dtype_dict = sdnq_quantize_layer(
                     module,
                     weights_dtype=get_minimum_dtype(weights_dtype, param_name, modules_dtype_dict),
                     quantized_matmul_dtype=quantized_matmul_dtype,
                     torch_dtype=torch_dtype,
-                    group_size=group_size,
-                    svd_rank=svd_rank,
+                    group_size=layer_group_size,
+                    svd_rank=layer_svd_rank,
                     svd_steps=svd_steps,
                     dynamic_loss_threshold=dynamic_loss_threshold,
-                    use_svd=use_svd,
+                    use_svd=layer_use_svd,
                     quant_conv=quant_conv,
                     use_quantized_matmul=use_quantized_matmul,
                     use_quantized_matmul_conv=use_quantized_matmul_conv,
@@ -595,6 +628,8 @@ def apply_sdnq_to_module(model, weights_dtype="int8", quantized_matmul_dtype=Non
             return_device=return_device,
             modules_to_not_convert=modules_to_not_convert,
             modules_dtype_dict=modules_dtype_dict,
+            modules_svd_dict=modules_svd_dict,
+            modules_group_size_dict=modules_group_size_dict,
             full_param_name=param_name,
         )
         setattr(model, module_name, module)
@@ -622,6 +657,8 @@ def sdnq_post_load_quant(
     add_skip_keys:bool = True,
     modules_to_not_convert: List[str] = None,
     modules_dtype_dict: Dict[str, List[str]] = None,
+    modules_svd_dict: Dict[int, List[str]] = None,
+    modules_group_size_dict: Dict[int, List[str]] = None,
     quantization_device: Optional[torch.device] = None,
     return_device: Optional[torch.device] = None,
 ):
@@ -634,6 +671,11 @@ def sdnq_post_load_quant(
     modules_dtype_dict = modules_dtype_dict.copy()
     if add_skip_keys:
         model, modules_to_not_convert, modules_dtype_dict = add_module_skip_keys(model, modules_to_not_convert, modules_dtype_dict)
+
+    if modules_svd_dict is None:
+        modules_svd_dict = {}
+    if modules_group_size_dict is None:
+        modules_group_size_dict = {}
 
     quantization_config = SDNQConfig(
         weights_dtype=weights_dtype,
@@ -652,6 +694,8 @@ def sdnq_post_load_quant(
         add_skip_keys=add_skip_keys,
         modules_to_not_convert=modules_to_not_convert,
         modules_dtype_dict=modules_dtype_dict,
+        modules_svd_dict=modules_svd_dict,
+        modules_group_size_dict=modules_group_size_dict,
         quantization_device=quantization_device,
         return_device=return_device,
     )
@@ -676,12 +720,16 @@ def sdnq_post_load_quant(
         non_blocking=non_blocking,
         modules_to_not_convert=modules_to_not_convert,
         modules_dtype_dict=modules_dtype_dict,
+        modules_svd_dict=modules_svd_dict,
+        modules_group_size_dict=modules_group_size_dict,
         quantization_device=quantization_device,
         return_device=return_device,
     )
 
     quantization_config.modules_to_not_convert = modules_to_not_convert
     quantization_config.modules_dtype_dict = modules_dtype_dict
+    quantization_config.modules_svd_dict = modules_svd_dict
+    quantization_config.modules_group_size_dict = modules_group_size_dict
 
     model.quantization_config = quantization_config
     if hasattr(model, "config"):
@@ -698,7 +746,7 @@ def sdnq_post_load_quant(
     return model
 
 
-class SDNQQuantize():
+class SDNQQuantize:
     def __init__(self, hf_quantizer):
         self.hf_quantizer = hf_quantizer
 
@@ -710,7 +758,7 @@ class SDNQQuantize():
         missing_keys: list[str] = None, # pylint: disable=unused-argument
         **kwargs, # pylint: disable=unused-argument
     ) -> dict[str, torch.FloatTensor]:
-        _module_name, value = tuple(input_dict.items())[0]
+        _module_name, value = next(iter(input_dict.items()))
         value = value[0]
         self.hf_quantizer.create_quantized_param(model, value, full_layer_name, value.device)
         param, name = get_module_from_name(model, full_layer_name)
@@ -815,16 +863,27 @@ class SDNQQuantizer(DiffusersQuantizer, HfQuantizer):
 
         layer, tensor_name = get_module_from_name(model, param_name)
         layer.weight = torch.nn.Parameter(param_value, requires_grad=False)
+        layer_use_svd, layer_svd_rank = get_layer_svd(
+            self.quantization_config.use_svd,
+            self.quantization_config.svd_rank,
+            param_name,
+            self.quantization_config.modules_svd_dict,
+        )
+        layer_group_size = get_layer_group_size(
+            param_name,
+            self.quantization_config.modules_group_size_dict,
+            self.quantization_config.group_size,
+        )
         layer, self.quantization_config.modules_to_not_convert, self.quantization_config.modules_dtype_dict = sdnq_quantize_layer(
             layer,
             weights_dtype=weights_dtype,
             quantized_matmul_dtype=self.quantization_config.quantized_matmul_dtype,
             torch_dtype=torch_dtype,
-            group_size=self.quantization_config.group_size,
-            svd_rank=self.quantization_config.svd_rank,
+            group_size=layer_group_size,
+            svd_rank=layer_svd_rank,
             svd_steps=self.quantization_config.svd_steps,
             dynamic_loss_threshold=self.quantization_config.dynamic_loss_threshold,
-            use_svd=self.quantization_config.use_svd,
+            use_svd=layer_use_svd,
             quant_conv=self.quantization_config.quant_conv,
             use_quantized_matmul=self.quantization_config.use_quantized_matmul,
             use_quantized_matmul_conv=self.quantization_config.use_quantized_matmul_conv,
@@ -1009,6 +1068,12 @@ class SDNQConfig(QuantizationConfigMixin):
             modules left in their original precision (e.g. Whisper encoder, Llava encoder, Mixtral gate layers).
         modules_dtype_dict (`dict`, *optional*, default to `None`):
             The dict of dtypes and list of modules, useful for quantizing some modules with a different dtype.
+        modules_svd_dict (`dict`, *optional*, default to `None`):
+            Dict mapping SVD rank (int) to list of layer name patterns. Matched layers get SVD applied with
+            the specified rank, overriding the global `use_svd` and `svd_rank` settings.
+        modules_group_size_dict (`dict`, *optional*, default to `None`):
+            Dict mapping group size (int) to list of layer name patterns. Matched layers use the specified
+            group size, overriding the global `group_size` setting.
     """
 
     def __init__( # pylint: disable=super-init-not-called
@@ -1034,6 +1099,8 @@ class SDNQConfig(QuantizationConfigMixin):
         return_device: Optional[torch.device] = None,
         modules_to_not_convert: Optional[List[str]] = None,
         modules_dtype_dict: Optional[Dict[str, List[str]]] = None,
+        modules_svd_dict: Optional[Dict[int, List[str]]] = None,
+        modules_group_size_dict: Optional[Dict[int, List[str]]] = None,
         is_training: bool = False,
         **kwargs, # pylint: disable=unused-argument
     ):
@@ -1063,6 +1130,8 @@ class SDNQConfig(QuantizationConfigMixin):
         self.return_device = return_device
         self.modules_to_not_convert = modules_to_not_convert
         self.modules_dtype_dict = modules_dtype_dict
+        self.modules_svd_dict = modules_svd_dict
+        self.modules_group_size_dict = modules_group_size_dict
         self.is_integer = dtype_dict[self.weights_dtype]["is_integer"]
         self.sdnq_version = sdnq_version
         self.post_init()
@@ -1103,24 +1172,66 @@ class SDNQConfig(QuantizationConfigMixin):
                 if not isinstance(key, str) or not isinstance(value, list):
                     raise ValueError(f"modules_dtype_dict must be a dictionary of strings and lists but got {type(key)} and {type(value)}")
 
+        if self.modules_svd_dict is None:
+            self.modules_svd_dict = {}
+        elif not isinstance(self.modules_svd_dict, dict):
+            raise ValueError(f"modules_svd_dict must be a dict but got {type(self.modules_svd_dict)}")
+        else:
+            self.modules_svd_dict = self.modules_svd_dict.copy()
+            for key, value in list(self.modules_svd_dict.items()):
+                if isinstance(value, str):
+                    value = [value]
+                    self.modules_svd_dict[key] = value
+                elif isinstance(value, tuple):
+                    value = list(value)
+                    self.modules_svd_dict[key] = value
+                if not isinstance(value, list):
+                    raise ValueError(f"modules_svd_dict values must be lists but got {type(value)}")
+            # JSON deserializes dict keys as strings, convert to int
+            self.modules_svd_dict = {int(k): v for k, v in self.modules_svd_dict.items()}
+
+        if self.modules_group_size_dict is None:
+            self.modules_group_size_dict = {}
+        elif not isinstance(self.modules_group_size_dict, dict):
+            raise ValueError(f"modules_group_size_dict must be a dict but got {type(self.modules_group_size_dict)}")
+        else:
+            self.modules_group_size_dict = self.modules_group_size_dict.copy()
+            for key, value in list(self.modules_group_size_dict.items()):
+                if isinstance(value, str):
+                    value = [value]
+                    self.modules_group_size_dict[key] = value
+                elif isinstance(value, tuple):
+                    value = list(value)
+                    self.modules_group_size_dict[key] = value
+                if not isinstance(value, list):
+                    raise ValueError(f"modules_group_size_dict values must be lists but got {type(value)}")
+            # JSON deserializes dict keys as strings, convert to int
+            self.modules_group_size_dict = {int(k): v for k, v in self.modules_group_size_dict.items()}
+
         self.modules_to_not_convert = self.modules_to_not_convert.copy()
         self.modules_dtype_dict = self.modules_dtype_dict.copy()
+        self.modules_svd_dict = self.modules_svd_dict.copy()
+        self.modules_group_size_dict = self.modules_group_size_dict.copy()
 
     def to_dict(self):
         quantization_config_dict = self.__dict__.copy() # make serializable
         quantization_config_dict["quantization_device"] = str(quantization_config_dict["quantization_device"]) if quantization_config_dict["quantization_device"] is not None else None
         quantization_config_dict["return_device"] = str(quantization_config_dict["return_device"]) if quantization_config_dict["return_device"] is not None else None
+        quantization_config_dict["modules_svd_dict"] = {str(k): v for k, v in self.modules_svd_dict.items()} if self.modules_svd_dict else {}
+        quantization_config_dict["modules_group_size_dict"] = {str(k): v for k, v in self.modules_group_size_dict.items()} if self.modules_group_size_dict else {}
         return quantization_config_dict
 
 
-import diffusers.quantizers.auto # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+import diffusers.quantizers.auto  # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+
 diffusers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq"] = SDNQQuantizer
 diffusers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq"] = SDNQConfig
 
 diffusers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq_training"] = SDNQQuantizer
 diffusers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq_training"] = SDNQConfig
 
-import transformers.quantizers.auto # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+import transformers.quantizers.auto  # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+
 transformers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq"] = SDNQQuantizer
 transformers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq"] = SDNQConfig
 
