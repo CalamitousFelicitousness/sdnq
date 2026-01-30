@@ -1,11 +1,11 @@
 import time
+
 import torch
 from tqdm import tqdm
 
 import sdnq.common
 import sdnq.quantizer
 from sdnq import sdnq_quantize_layer
-
 
 
 def get_tflops(it_s: float, m: int, n: int, k: int) -> float:
@@ -20,7 +20,7 @@ def benchmark_linear(name: str, linear: torch.nn.Linear, x: torch.Tensor, steps:
         z = linear(x)
         sync_func(x.device)
         t0 = time.time()
-        for i in tqdm(range(steps)):
+        for _i in tqdm(range(steps)):
             z = linear(x)
             sync_func(x.device)
         t1 = time.time()
@@ -84,7 +84,7 @@ def main(
     sdnq.quantizer.use_tensorwise_fp8_matmul = backup_tw_fp8
     sdnq.forward.use_tensorwise_fp8_matmul = backup_tw_fp8
 
-    print("")
+    print()
     print("==================================================")
     print("GPU:", getattr(torch, torch.device(device).type).get_device_name(device))
     print("Steps:", steps, "| MNK:", round((m*n*k)**(1/3)), "| Float:", dtype)
@@ -105,7 +105,7 @@ def main(
     print("SDNQ FP8 TW SVD TFLOPS:", sdnq_fp8_tw_svd_tflops)
     print("SDNQ FP16 SVD TFLOPS:", sdnq_fp16_svd_tflops)
     print("==================================================")
-    print("")
+    print()
 
 
 if __name__ == "__main__":

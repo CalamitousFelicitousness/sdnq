@@ -2,18 +2,15 @@ from collections.abc import Callable, Iterator
 
 import torch
 
-from ..training import SDNQTensor
 from ..common import compile_func, use_tensorwise_fp8_matmul
-
-from ..training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic
+from ..training import SDNQTensor
 from ..training.layers.linear.linear_fp8_dynamic import fp8_matmul_dynamic
 from ..training.layers.linear.linear_fp8_tensorwise_dynamic import fp8_matmul_tensorwise_dynamic
 from ..training.layers.linear.linear_fp16_dynamic import fp16_matmul_dynamic
-
+from ..training.layers.linear.linear_int8_dynamic import int8_matmul_dynamic
+from .adamw import adam_update, adam_update_compiled
 from .optimizer import SDNQOptimizer
 from .utils import lerp_buffer_stochastic_
-from .adamw import adam_update, adam_update_compiled
-
 
 default_ns_coefficients = (
     (3.4445, -4.7750,  2.0315),
@@ -143,7 +140,7 @@ class Muon(SDNQOptimizer):
                 param=param_fp32,
                 grad=grad,
                 momentum_buffer=state["momentum_buffer"],
-                v_buffer=state.get("v_buffer", None),
+                v_buffer=state.get("v_buffer"),
                 step=state["step"],
                 betas=group["betas"],
                 clip=group["clip_threshold"][0],

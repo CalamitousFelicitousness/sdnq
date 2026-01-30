@@ -1,4 +1,5 @@
 import time
+
 import torch
 from tqdm import tqdm
 
@@ -19,7 +20,7 @@ def benchmark_linear(name: str, linear: torch.nn.Linear, x: torch.Tensor, steps:
         z = linear(x)
         sync_func(x.device)
         t0 = time.time()
-        for i in tqdm(range(steps)):
+        for _i in tqdm(range(steps)):
             z = linear(x)
             sync_func(x.device)
         t1 = time.time()
@@ -618,7 +619,7 @@ def main(
     else:
         print("Torch Compile is disabled, skipping quantized matmul tests.")
 
-    print("")
+    print()
     print("==================================================")
     print("GPU:", getattr(torch, torch.device(device).type).get_device_name(device))
     print("Steps:", steps, "| MNK:", round((m*n*k)**(1/3)), "| Float:", dtype)
@@ -1169,7 +1170,7 @@ def main(
         print("SDNQ FP16 UFP3 SVD TFLOPS:", sdnq_fp16_ufp3_svd_tflops)
         print("SDNQ FP16 UFP2 SVD TFLOPS:", sdnq_fp16_ufp2_svd_tflops)
         print("==================================================")
-    print("")
+    print()
 
 
 if __name__ == "__main__":

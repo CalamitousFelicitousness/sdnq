@@ -6,7 +6,7 @@ from itertools import chain
 import torch
 
 from ..training import SDNQTensor
-from .utils import get_param_grad, get_param_grad_compiled, update_param_, update_param_compiled_, send_buffers_to_device, send_buffers_to_cpu
+from .utils import get_param_grad, get_param_grad_compiled, send_buffers_to_cpu, send_buffers_to_device, update_param_, update_param_compiled_
 
 
 class SDNQOptimizer(torch.optim.Optimizer):
