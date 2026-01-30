@@ -18,6 +18,69 @@ license-files = ["LICENSE"]
 
 dependencies = ["torch", "diffusers", "transformers", "accelerate"]
 
+[project.optional-dependencies]
+report = ["Jinja2", "matplotlib"]
+report-pdf = ["Jinja2", "matplotlib", "weasyprint"]
+
+[project.optional-dependencies.dev]
+ruff = ["ruff>=0.14"]
+
 [project.urls]
 Homepage = "https://github.com/Disty0/sdnq"
 Issues = "https://github.com/Disty0/sdnq/issues"
+
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py310"
+line-length = 150
+src = ["src", "scripts", "benchmarks"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # Pyflakes — unused imports, undefined names, etc.
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "I",      # isort — import ordering
+    "UP",     # pyupgrade — modernize syntax for target Python version
+    "B",      # flake8-bugbear — likely bugs and design problems
+    "SIM",    # flake8-simplify — simplifiable constructs
+    "RUF",    # Ruff-specific rules
+    "PERF",   # Perflint — performance anti-patterns
+    "FURB",   # refurb — modernization suggestions
+    "PLC",    # Pylint convention
+    "PLE",    # Pylint error
+    "PLW",    # Pylint warning
+]
+ignore = [
+    "E501",    # line-too-long — enforced loosely via line-length, not per-line
+    "E731",    # lambda-assignment — used in compact dispatch tables
+    "B905",    # zip-without-explicit-strict — too noisy for math-heavy code
+    "SIM105",  # suppressible-exception — contextlib.suppress not always clearer
+    "SIM108",  # if-else-block-instead-of-if-exp — readability preference
+    "SIM110",  # reimplemented-builtin — any()/all() rewrites can hurt readability
+    "SIM118",  # in-dict-keys — `.keys()` is sometimes intentional for clarity
+    "UP006",   # non-pep585-annotation — list[] vs List[] modernization, large churn
+    "UP007",   # non-pep604-annotation-union — Optional[X] is fine
+    "UP015",   # redundant-open-modes — explicit "r" mode is clearer
+    "UP035",   # deprecated-import — typing.Optional etc. still valid on py310
+    "UP045",   # non-pep604-annotation-optional — same as UP007 for Optional
+    "RUF012",  # mutable-class-default — too noisy for nn.Module subclasses
+    "RUF013",  # implicit-optional — widespread pattern, low value fix
+    "PLC0415", # import-outside-top-level — conditional/deferred imports are intentional
+    "PLW2901", # redefined-loop-name — common pattern in this codebase
+    "PLW0602", # global-variable-not-assigned — false positives with module-level state
+    "PERF203", # try-except-in-loop — unavoidable in layer iteration
+    "RUF005",  # collection-literal-concatenation — list + list is clear for constants
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = [
+    "B023",   # function-uses-loop-variable — acceptable in scripts
+    "E402",   # module-import-not-at-top — some scripts set up paths before imports
+]
+"benchmarks/*" = [
+    "B023",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sdnq"]

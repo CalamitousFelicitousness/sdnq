@@ -1,7 +1,7 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
-import os
 import logging
+import os
 from dataclasses import dataclass
 
 import torch
@@ -10,12 +10,12 @@ logger = logging.getLogger("sdnq")
 
 
 @dataclass
-class HIPAgent():
+class HIPAgent:
     gfx_version: int
 
 
 # wrapper for modules.devices and modules.shared from SD.Next
-class Devices():
+class Devices:
     def __init__(self):
         self.cpu = torch.device("cpu")
         self.device = torch.device(
@@ -84,7 +84,7 @@ class Devices():
     def get_hip_agent(self):
         return HIPAgent(int("0x" + getattr(torch.cuda.get_device_properties(self.device), "gcnArchName", "gfx0000")[3:], 16))
 
-class SharedOpts():
+class SharedOpts:
     def __init__(self, devices):
         self.diffusers_offload_mode = os.environ.get("SDNQ_OFFLOAD_MODE", "none").lower()
         if os.environ.get("SDNQ_USE_TORCH_COMPILE", None) is None:
@@ -93,7 +93,7 @@ class SharedOpts():
             self.sdnq_dequantize_compile = bool(os.environ.get("SDNQ_USE_TORCH_COMPILE", "1").lower() not in {"0", "false", "no"})
 
 
-class Shared():
+class Shared:
     def __init__(self, devices, logger):
         self.log = logger
         self.opts = SharedOpts(devices=devices)
