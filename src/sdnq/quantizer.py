@@ -127,6 +127,7 @@ def check_param_name_in(param_name: str, param_list: list[str]) -> str:
         if (
             param_name == param
             or param in split_param_name
+            or param_name.endswith("." + param)
             or ("*" in param and re.match(param.replace(".*", "\\.*").replace("*", ".*"), param_name))
         ):
             return param
