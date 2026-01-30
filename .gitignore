@@ -1,5 +1,39 @@
-__pycache__
-.ruff_cache
-build
-dist
-src/sdnq.egg-info
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+src/sdnq.egg-info/
+
+# Ruff
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Testing / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Generated reports (analysis output, not source)
+quant_sensitivity_report*
