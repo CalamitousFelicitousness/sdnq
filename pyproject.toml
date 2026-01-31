@@ -22,9 +22,7 @@ dependencies = ["torch", "diffusers", "transformers", "accelerate"]
 report = ["Jinja2", "matplotlib"]
 report-pdf = ["Jinja2", "matplotlib", "weasyprint"]
 quality = ["torchmetrics", "lpips"]
-
-[project.optional-dependencies.dev]
-ruff = ["ruff>=0.14"]
+dev = ["ruff>=0.14"]
 
 [project.urls]
 Homepage = "https://github.com/Disty0/sdnq"
