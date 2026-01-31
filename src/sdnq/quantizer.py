@@ -555,16 +555,19 @@ def sdnq_quantize_layer(layer, weights_dtype="int8", quantized_matmul_dtype=None
                 modules_dtype_dict[chosen_dtype] = [param_name]
             else:
                 modules_dtype_dict[chosen_dtype].append(param_name)
-            logger.info("  %s -> %s", param_name, chosen_dtype)
+            logger.info("  quantized %s -> %s", param_name, chosen_dtype)
+            print(f"  {param_name} -> {chosen_dtype}")
         else:
-            logger.info("  %s -> %s", param_name, weights_dtype)
+            logger.info("  quantized %s -> %s", param_name, weights_dtype)
+            print(f"  {param_name} -> {weights_dtype}")
     else:
         layer = layer.to(return_device, dtype=torch_dtype, non_blocking=non_blocking)
         if use_dynamic_quantization:
             if modules_to_not_convert is None:
                 modules_to_not_convert = []
             modules_to_not_convert.append(param_name)
-            logger.info("  %s -> skipped (no dtype met threshold)", param_name)
+            logger.info("  skipped %s (no dtype met threshold)", param_name)
+            print(f"  {param_name} -> skipped (no dtype met threshold)")
 
     return layer, modules_to_not_convert, modules_dtype_dict
 
