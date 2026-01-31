@@ -1,0 +1,12 @@
+{
+  "transformer": {
+    "weights_dtype": "uint4",
+    "group_size": 32,
+    "dequantize_fp32": true
+  },
+  "text_encoder": {
+    "weights_dtype": "uint4",
+    "group_size": 32,
+    "dequantize_fp32": true
+  }
+}
