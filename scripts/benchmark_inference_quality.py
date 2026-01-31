@@ -154,6 +154,10 @@ def parse_args():
                     help="Custom report output path")
     p.add_argument("--compare-only", action="store_true",
                     help="Skip inference, recompute metrics from saved data in --output-dir")
+    p.add_argument("--fp16-from", default=None,
+                    help="Reuse FP16 results from this directory (skips FP16 inference)")
+    p.add_argument("--no-skip-keys", action="store_true",
+                    help="Disable automatic model-specific skip keys (quantize ALL layers)")
 
     return p.parse_args()
 
@@ -285,22 +289,24 @@ def load_quantized_pipeline(model_id, quantized_path, cache_dir, device,
         print(f"  Loaded per-component config from {args.pipeline_config}")
 
     # Discover and quantize components
+    add_skip_keys = not getattr(args, "no_skip_keys", False)
     if per_comp_config:
-        _quantize_pipeline_components(pipe, per_comp_config, device)
+        _quantize_pipeline_components(pipe, per_comp_config, device, add_skip_keys)
     else:
-        _quantize_pipeline_uniform(pipe, args, device)
+        _quantize_pipeline_uniform(pipe, args, device, add_skip_keys)
 
     print("  On-the-fly quantization complete.")
     return pipe
 
 
-def _quantize_pipeline_components(pipe, per_comp_config, device):
+def _quantize_pipeline_components(pipe, per_comp_config, device, add_skip_keys=True):
     """Quantize pipeline components using per-component config."""
     from sdnq.quantizer import sdnq_post_load_quant
 
     valid_keys = {
         "weights_dtype", "group_size", "svd_rank", "svd_steps",
         "use_svd", "use_quantized_matmul", "dequantize_fp32",
+        "use_stochastic_rounding",
         "modules_to_not_convert", "modules_dtype_dict", "modules_svd_dict",
         "modules_group_size_dict",
     }
@@ -311,10 +317,10 @@ def _quantize_pipeline_components(pipe, per_comp_config, device):
             continue
         quant_kwargs = {k: v for k, v in config.items() if k in valid_keys}
         print(f"  Quantizing {comp_name} (dtype={config.get('weights_dtype', 'int8')})...")
-        sdnq_post_load_quant(component, add_skip_keys=True, **quant_kwargs)
+        sdnq_post_load_quant(component, add_skip_keys=add_skip_keys, **quant_kwargs)
 
 
-def _quantize_pipeline_uniform(pipe, args, device):
+def _quantize_pipeline_uniform(pipe, args, device, add_skip_keys=True):
     """Quantize all quantizable pipeline components with uniform config."""
     from sdnq.quantizer import sdnq_post_load_quant
 
@@ -339,7 +345,7 @@ def _quantize_pipeline_uniform(pipe, args, device):
         if args.use_svd:
             quant_kwargs["use_svd"] = True
             quant_kwargs["svd_rank"] = args.svd_rank
-        sdnq_post_load_quant(component, add_skip_keys=True, **quant_kwargs)
+        sdnq_post_load_quant(component, add_skip_keys=add_skip_keys, **quant_kwargs)
 
 
 def unload_pipeline(pipe):
@@ -1192,14 +1198,20 @@ def main():
         print(f"Pipeline class: {pipeline_cls.__name__}")
 
         # Phase 1: FP16 baseline
-        fp16_pipe = load_fp16_pipeline(
-            args.model_id, args.cache_dir, args.device, torch_dtype, pipeline_cls,
-            cpu_offload=args.cpu_offload,
-        )
-        fp16_results = run_pipeline_inference(
-            fp16_pipe, prompts, args.seeds, args, args.output_dir, "fp16",
-        )
-        unload_pipeline(fp16_pipe)
+        if args.fp16_from:
+            print(f"\n--fp16-from: reusing FP16 results from {args.fp16_from}")
+            fp16_results = load_results_from_disk(
+                args.fp16_from, "fp16", prompts, args.seeds,
+            )
+        else:
+            fp16_pipe = load_fp16_pipeline(
+                args.model_id, args.cache_dir, args.device, torch_dtype, pipeline_cls,
+                cpu_offload=args.cpu_offload,
+            )
+            fp16_results = run_pipeline_inference(
+                fp16_pipe, prompts, args.seeds, args, args.output_dir, "fp16",
+            )
+            unload_pipeline(fp16_pipe)
 
         # Phase 2: Quantized
         quant_pipe = load_quantized_pipeline(

@@ -51,7 +51,8 @@ def fp8_matmul_tensorwise(
 
 def quantized_linear_forward_fp8_matmul_tensorwise(self, input: torch.FloatTensor) -> torch.FloatTensor:
     if torch.numel(input) / input.shape[-1] < 32:
-        return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, self.zero_point, self.svd_up, self.svd_down, skip_quantized_matmul=True), self.bias)
+        weight = self.sdnq_dequantizer(self.weight, self.scale, self.zero_point, self.svd_up, self.svd_down, skip_quantized_matmul=True)
+        return torch.nn.functional.linear(input.to(dtype=weight.dtype), weight, self.bias)
     if self.sdnq_dequantizer.re_quantize_for_matmul:
         weight, scale = self.sdnq_dequantizer.re_quantize_matmul(self.weight, self.scale, self.zero_point, None, None)
         quantized_weight_shape = None

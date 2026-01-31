@@ -1,5 +1,6 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -36,6 +37,8 @@ from .layers import get_sdnq_wrapper_class
 from .packed_float import pack_float
 from .packed_int import pack_int_asymetric, pack_int_symetric
 from .sdnext import devices, shared
+
+logger = logging.getLogger(__name__)
 
 
 class QuantizationMethod(str, Enum):
@@ -486,6 +489,8 @@ def sdnq_quantize_layer(layer, weights_dtype="int8", quantized_matmul_dtype=None
     layer.weight.requires_grad_(False)
     if return_device is None:
         return_device = layer.weight.device
+    if quantization_device is None and torch.cuda.is_available() and layer.weight.device.type == "cpu":
+        quantization_device = torch.device("cuda")
     if quantization_device is not None:
         layer.weight.data = layer.weight.to(quantization_device, non_blocking=non_blocking)
 
@@ -545,16 +550,21 @@ def sdnq_quantize_layer(layer, weights_dtype="int8", quantized_matmul_dtype=None
         if use_dynamic_quantization:
             if modules_dtype_dict is None:
                 modules_dtype_dict = {}
-            if layer.sdnq_dequantizer.weights_dtype not in modules_dtype_dict.keys():
-                modules_dtype_dict[layer.sdnq_dequantizer.weights_dtype] = [param_name]
+            chosen_dtype = layer.sdnq_dequantizer.weights_dtype
+            if chosen_dtype not in modules_dtype_dict.keys():
+                modules_dtype_dict[chosen_dtype] = [param_name]
             else:
-                modules_dtype_dict[layer.sdnq_dequantizer.weights_dtype].append(param_name)
+                modules_dtype_dict[chosen_dtype].append(param_name)
+            logger.info("  %s -> %s", param_name, chosen_dtype)
+        else:
+            logger.info("  %s -> %s", param_name, weights_dtype)
     else:
         layer = layer.to(return_device, dtype=torch_dtype, non_blocking=non_blocking)
         if use_dynamic_quantization:
             if modules_to_not_convert is None:
                 modules_to_not_convert = []
             modules_to_not_convert.append(param_name)
+            logger.info("  %s -> skipped (no dtype met threshold)", param_name)
 
     return layer, modules_to_not_convert, modules_dtype_dict
 
