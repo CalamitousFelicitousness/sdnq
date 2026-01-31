@@ -128,16 +128,17 @@ def main():
         torch_dtype=torch.bfloat16,
         cache_dir=args.cache_dir,
         trust_remote_code=True,
+        low_cpu_mem_usage=True,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Moving model to {device}...")
-    model = model.to(device)
-
     # 4. Quantize with dynamic per-layer dtype selection
+    # Keep model on CPU; each layer is moved to CUDA individually for quantization
+    # then moved back to CPU. This avoids needing the full bf16 model in VRAM.
     from sdnq import SDNQConfig, save_sdnq_model
     from sdnq.quantizer import sdnq_post_load_quant
 
-    print("\nQuantizing with dynamic dtype selection:")
+    quant_device = torch.device("cuda") if torch.cuda.is_available() else None
+    return_device = torch.device("cpu")
+    print(f"\nQuantizing with dynamic dtype selection (quantize on {quant_device or 'cpu'}, store on {return_device}):")
     print(f"  min_dtype={args.weights_dtype}, threshold={args.dynamic_loss_threshold}, "
           f"group_size={args.group_size}")
 
@@ -148,6 +149,8 @@ def main():
         group_size=args.group_size,
         use_dynamic_quantization=True,
         dynamic_loss_threshold=args.dynamic_loss_threshold,
+        quantization_device=quant_device,
+        return_device=return_device,
     )
 
     # 5. Build config and save
