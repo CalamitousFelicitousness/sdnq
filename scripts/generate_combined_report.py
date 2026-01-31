@@ -77,6 +77,15 @@ TESTS = [
      "ablation_uint4_group64_results", "uint4 Group Size", "u4grp"),
     ("uint4 tensorwise (g=-1)", "ablation_uint4_tensorwise_report",
      "ablation_uint4_tensorwise_results", "uint4 Group Size", "u4grp"),
+    # Phase 4c: uint4 SVD Rank & Per-Layer Ablation
+    ("uint4 + SVD rank 32", "ablation_uint4_svd_rank32_report",
+     "ablation_uint4_svd_rank32_results", "uint4 SVD Rank", "u4svd"),
+    ("uint4 + SVD rank 128", "ablation_uint4_svd_rank128_report",
+     "ablation_uint4_svd_rank128_results", "uint4 SVD Rank", "u4svd"),
+    ("uint4 + per-layer group size (no SVD)", "ablation_uint4_per_layer_group_size_report",
+     "ablation_uint4_per_layer_group_size_results", "uint4 Per-Layer", "u4perlayer"),
+    ("uint4 + per-layer SVD (uniform g=32)", "ablation_uint4_per_layer_svd_report",
+     "ablation_uint4_per_layer_svd_results", "uint4 Per-Layer", "u4perlayer"),
 ]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
