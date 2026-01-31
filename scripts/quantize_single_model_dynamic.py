@@ -123,14 +123,15 @@ def main():
 
     import transformers
     model_cls = getattr(transformers, model_class_name)
-    device_map = "auto" if torch.cuda.is_available() else "cpu"
     model = model_cls.from_pretrained(
         args.model_id,
         torch_dtype=torch.bfloat16,
         cache_dir=args.cache_dir,
         trust_remote_code=True,
-        device_map=device_map,
     )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Moving model to {device}...")
+    model = model.to(device)
 
     # 4. Quantize with dynamic per-layer dtype selection
     from sdnq import SDNQConfig, save_sdnq_model
