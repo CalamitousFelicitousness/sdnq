@@ -1,0 +1,24 @@
+{
+  "transformer": {
+    "weights_dtype": "uint4",
+    "group_size": 32,
+    "use_svd": true,
+    "svd_rank": 128,
+    "modules_to_not_convert": [
+      "t_embedder", "cap_embedder", "siglip_embedder",
+      "all_x_embedder", "all_final_layer", "adaLN_modulation",
+      "attention.to_q", "attention.to_k", "attention.to_v", "attention.to_out",
+      "self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj"
+    ]
+  },
+  "text_encoder": {
+    "weights_dtype": "uint4",
+    "group_size": 32,
+    "use_svd": true,
+    "svd_rank": 128,
+    "modules_to_not_convert": [
+      "t_embedder",
+      "self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj"
+    ]
+  }
+}
