@@ -68,6 +68,15 @@ TESTS = [
      "ablation_fp8_e4m3fn_quantized_matmul_results", "FP8 Dtype", "fp8"),
     ("int8 group_size=64", "ablation_int8_group64_report", "ablation_int8_group64_results", "Group Size", "grp"),
     ("int8 tensorwise (g=-1)", "ablation_int8_tensorwise_report", "ablation_int8_tensorwise_results", "Group Size", "grp"),
+    # Phase 4b: uint4 Runtime & Group Size Ablation
+    ("uint4 + quantized matmul", "ablation_uint4_quantized_matmul_report",
+     "ablation_uint4_quantized_matmul_results", "uint4 Runtime Ablation", "u4runtime"),
+    ("uint4 + dequantize FP32", "ablation_uint4_dequant_fp32_report",
+     "ablation_uint4_dequant_fp32_results", "uint4 Runtime Ablation", "u4runtime"),
+    ("uint4 group_size=64", "ablation_uint4_group64_report",
+     "ablation_uint4_group64_results", "uint4 Group Size", "u4grp"),
+    ("uint4 tensorwise (g=-1)", "ablation_uint4_tensorwise_report",
+     "ablation_uint4_tensorwise_results", "uint4 Group Size", "u4grp"),
 ]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
