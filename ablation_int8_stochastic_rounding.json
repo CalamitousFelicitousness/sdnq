@@ -1,0 +1,12 @@
+{
+  "transformer": {
+    "weights_dtype": "int8",
+    "group_size": 32,
+    "use_stochastic_rounding": true
+  },
+  "text_encoder": {
+    "weights_dtype": "int8",
+    "group_size": 32,
+    "use_stochastic_rounding": true
+  }
+}
