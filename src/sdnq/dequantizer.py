@@ -1,14 +1,13 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import torch
 
 from .common import compile_func, dtype_dict, use_contiguous_mm, use_tensorwise_fp8_matmul
 from .layers import SDNQLayer
 from .packed_float import unpack_float
-from .packed_int import unpack_int_asymetric, unpack_int_symetric
+from .packed_int import unpack_int
 from .sdnext import devices
 
 
@@ -273,7 +272,7 @@ class SDNQDequantizer:
         self.is_integer_matmul = dtype_dict[quantized_matmul_dtype]["is_integer"]
 
     @devices.inference_context()
-    def re_quantize_matmul(self, weight, scale, zero_point, svd_up, svd_down): # pylint: disable=unused-argument
+    def re_quantize_matmul(self, weight, scale, zero_point, svd_up, svd_down):  # pylint: disable=unused-argument
         if self.is_packed:
             if self.is_integer:
                 if self.is_unsigned:
