@@ -513,6 +513,14 @@ module_skip_keys_dict = {
         [".emb_in", ".txt_in", ".vid_in", ".emb_scale", ".vid_out", ".vid_out_norm", ".vid_out_ada"],
         {}
     ],
+    "Qwen3Model": [
+        ["embed_tokens", "model.norm"],
+        {}
+    ],
+    "AnimaLLMAdapter": [
+        ["embed", "out_proj"],
+        {}
+    ],
 }
 
 module_skip_keys_dict["LongCatImageTransformer2DModel"] = module_skip_keys_dict["FluxTransformer2DModel"]

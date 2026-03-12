@@ -272,7 +272,7 @@ class SDNQDequantizer:
         self.is_integer_matmul = dtype_dict[quantized_matmul_dtype]["is_integer"]
 
     @devices.inference_context()
-    def re_quantize_matmul(self, weight, scale, zero_point, svd_up, svd_down): # pylint: disable=unused-argument
+    def re_quantize_matmul(self, weight, scale, zero_point, svd_up, svd_down):  # pylint: disable=unused-argument
         if self.is_packed:
             if self.is_integer:
                 if self.is_unsigned:

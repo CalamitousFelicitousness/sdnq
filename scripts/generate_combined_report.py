@@ -13,9 +13,11 @@ Usage:
     python scripts/generate_combined_report.py
 """
 
+import argparse
 import base64
 import csv
 import io
+import json
 import math
 from pathlib import Path
 
@@ -56,7 +58,36 @@ TESTS = [
     ("uint4 hybrid uint8 attn + SVD", "ref2_uint4_hybrid_u8attn_svd_report", "ref2_uint4_hybrid_u8attn_svd_results", "uint4 Hybrid Configs", "u4hyb"),
     ("uint4 kitchen sink (all levers)", "ref2_uint4_kitchen_sink_report", "ref2_uint4_kitchen_sink_results", "uint4 Hybrid Configs", "u4hyb"),
     ("uint4 auto-config enhanced", "ref2_uint4_autoconfig_enhanced_report", "ref2_uint4_autoconfig_enhanced_results", "uint4 Auto-Config", "u4auto"),
-    # Phase 4: Runtime & Dtype Ablation
+    # Phase 4: Quantized Matmul ON vs OFF
+    ("uint8 + quantized matmul", "ref2_uint8_matmul_report",
+     "ref2_uint8_matmul_results", "Quantized Matmul Comparison", "matmul"),
+    ("int8 skip adaLN+attn + quantized matmul", "ref2_int8_skip_adaln_attn_matmul_report",
+     "ref2_int8_skip_adaln_attn_matmul_results", "Quantized Matmul Comparison", "matmul"),
+    ("uint8 skip adaLN+attn + quantized matmul", "ref2_uint8_skip_adaln_attn_matmul_report",
+     "ref2_uint8_skip_adaln_attn_matmul_results", "Quantized Matmul Comparison", "matmul"),
+    ("uint4 auto-config enhanced + quantized matmul", "ref2_uint4_autoconfig_enhanced_matmul_report",
+     "ref2_uint4_autoconfig_enhanced_matmul_results", "Quantized Matmul Comparison", "matmul"),
+    ("uint8 skip embed+adaLN+final + quantized matmul", "ref2_uint8_skip_all_sensitive_matmul_report",
+     "ref2_uint8_skip_all_sensitive_matmul_results", "Quantized Matmul Comparison", "matmul"),
+    # uint8 Per-Layer Optimisation
+    ("uint8 skip-sensitive (pre matmul SVD fix)", "ref2_uint8_skip_sensitive_per_layer_svd_report",
+     "ref2_uint8_skip_sensitive_per_layer_svd_results", "uint8 Per-Layer", "u8perlayer"),
+    ("uint8 skip-sensitive + matmul (pre matmul SVD fix)", "ref2_uint8_skip_sensitive_per_layer_svd_matmul_report",
+     "ref2_uint8_skip_sensitive_per_layer_svd_matmul_results", "uint8 Per-Layer", "u8perlayer"),
+    ("uint8 skip-sensitive + per-layer SVD", "ref2_uint8_skip_sensitive_per_layer_svd_fixed_report",
+     "ref2_uint8_skip_sensitive_per_layer_svd_fixed_results", "uint8 Per-Layer", "u8perlayer"),
+    ("uint8 skip-sensitive + per-layer SVD + matmul", "ref2_uint8_skip_sensitive_per_layer_svd_matmul_fixed_report",
+     "ref2_uint8_skip_sensitive_per_layer_svd_matmul_fixed_results", "uint8 Per-Layer", "u8perlayer"),
+    # int8 Per-Layer Optimisation
+    ("int8 + skip embed+adaLN+final + matmul", "ref2_int8_skip_all_sensitive_matmul_report",
+     "ref2_int8_skip_all_sensitive_matmul_results", "int8 Per-Layer", "i8perlayer"),
+    ("int8 skip-sensitive + per-layer SVD", "ref2_int8_skip_sensitive_per_layer_svd_report",
+     "ref2_int8_skip_sensitive_per_layer_svd_results", "int8 Per-Layer", "i8perlayer"),
+    ("int8 skip-sensitive + per-layer SVD + matmul (pre matmul SVD fix)", "ref2_int8_skip_sensitive_per_layer_svd_matmul_report",
+     "ref2_int8_skip_sensitive_per_layer_svd_matmul_results", "int8 Per-Layer", "i8perlayer"),
+    ("int8 skip-sensitive + per-layer SVD + matmul", "ref2_int8_skip_sensitive_per_layer_svd_matmul_fixed_report",
+     "ref2_int8_skip_sensitive_per_layer_svd_matmul_fixed_results", "int8 Per-Layer", "i8perlayer"),
+    # Phase 4a: Runtime & Dtype Ablation
     ("int8 + quantized matmul", "ablation_int8_quantized_matmul_report", "ablation_int8_quantized_matmul_results", "Runtime Ablation", "runtime"),
     ("int8 + dequantize FP32", "ablation_int8_dequant_fp32_report", "ablation_int8_dequant_fp32_results", "Runtime Ablation", "runtime"),
     ("int8 + stochastic rounding", "ablation_int8_stochastic_rounding_report",
@@ -86,6 +117,34 @@ TESTS = [
      "ablation_uint4_per_layer_group_size_results", "uint4 Per-Layer", "u4perlayer"),
     ("uint4 + per-layer SVD (uniform g=32)", "ablation_uint4_per_layer_svd_report",
      "ablation_uint4_per_layer_svd_results", "uint4 Per-Layer", "u4perlayer"),
+    # SVD + matmul interaction tests (SVD rank 96 added to all matmul comparison configs)
+    ("int8 + SVD only", "svdfix_int8_svd_report", "svdfix_int8_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("int8 + SVD + matmul", "svdfix_int8_svd_matmul_report", "svdfix_int8_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 + SVD only", "svdfix_uint8_svd_report", "svdfix_uint8_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 + SVD + matmul", "svdfix_uint8_svd_matmul_report", "svdfix_uint8_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("int8 skip adaLN+attn + SVD only", "svdfix_int8_skip_adaln_attn_svd_report",
+     "svdfix_int8_skip_adaln_attn_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("int8 skip adaLN+attn + SVD + matmul", "svdfix_int8_skip_adaln_attn_svd_matmul_report",
+     "svdfix_int8_skip_adaln_attn_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 skip adaLN+attn + SVD only", "svdfix_uint8_skip_adaln_attn_svd_report",
+     "svdfix_uint8_skip_adaln_attn_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 skip adaLN+attn + SVD + matmul", "svdfix_uint8_skip_adaln_attn_svd_matmul_report",
+     "svdfix_uint8_skip_adaln_attn_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 skip-sensitive + SVD only", "svdfix_uint8_skip_sensitive_svd_report",
+     "svdfix_uint8_skip_sensitive_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint8 skip-sensitive + SVD + matmul", "svdfix_uint8_skip_sensitive_svd_matmul_report",
+     "svdfix_uint8_skip_sensitive_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("int8 skip-sensitive + SVD only", "svdfix_int8_skip_sensitive_svd_report",
+     "svdfix_int8_skip_sensitive_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("int8 skip-sensitive + SVD + matmul", "svdfix_int8_skip_sensitive_svd_matmul_report",
+     "svdfix_int8_skip_sensitive_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint4 + SVD only", "svdfix_uint4_svd_report", "svdfix_uint4_svd_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint4 + SVD + matmul", "svdfix_uint4_svd_matmul_report",
+     "svdfix_uint4_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint4 autoconfig + SVD + matmul", "svdfix_uint4_autoconfig_svd_matmul_report",
+     "svdfix_uint4_autoconfig_svd_matmul_results", "SVD + Matmul Tests", "svdfix"),
+    ("uint4 autoconfig + SVD only", "svdfix_uint4_autoconfig_svd_report",
+     "svdfix_uint4_autoconfig_svd_results", "SVD + Matmul Tests", "svdfix"),
 ]
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -392,8 +451,435 @@ def build_memory_bar_chart(memory_data, tests_summary):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# ── Matmul ON vs OFF comparison ───────────────────────────────────────────
+
+MATMUL_PAIRS = [
+    ("int8 (no skip keys)", "int8 + quantized matmul"),
+    ("uint8 (no skip keys)", "uint8 + quantized matmul"),
+    ("int8 + skip adaLN+attn", "int8 skip adaLN+attn + quantized matmul"),
+    ("uint8 + skip embed+adaLN+attn+final", "uint8 skip adaLN+attn + quantized matmul"),
+    ("uint8 + skip embed+adaLN+final", "uint8 skip embed+adaLN+final + quantized matmul"),
+    ("uint8 skip-sensitive + per-layer SVD", "uint8 skip-sensitive + per-layer SVD + matmul"),
+    ("int8 + skip embed+adaLN+final", "int8 + skip embed+adaLN+final + matmul"),
+    ("int8 skip-sensitive + per-layer SVD", "int8 skip-sensitive + per-layer SVD + matmul"),
+    # Per-layer SVD matmul comparisons (legacy labels)
+    ("uint8 skip-sensitive (pre matmul SVD fix)", "uint8 skip-sensitive + matmul (pre matmul SVD fix)"),
+    ("int8 skip-sensitive + per-layer SVD + matmul (pre matmul SVD fix)", "int8 skip-sensitive + per-layer SVD + matmul"),
+    ("uint4 (no skip keys)", "uint4 + quantized matmul"),
+    ("uint4 auto-config enhanced", "uint4 auto-config enhanced + quantized matmul"),
+]
+
+
+def _mean_metric(rows, metric):
+    vals = [float(r[metric]) for r in rows if r.get(metric)]
+    return sum(vals) / len(vals) if vals else None
+
+
+def build_matmul_comparison_chart(tests_summary):
+    """Build grouped horizontal bar chart comparing PSNR with matmul OFF vs ON."""
+    labels = []
+    off_vals = []
+    on_vals = []
+
+    for off_name, on_name in MATMUL_PAIRS:
+        if off_name not in tests_summary or on_name not in tests_summary:
+            continue
+        off_psnr = _mean_metric(tests_summary[off_name], "psnr")
+        on_psnr = _mean_metric(tests_summary[on_name], "psnr")
+        if off_psnr is None or on_psnr is None:
+            continue
+        # Short label for chart
+        short = off_name.replace(" (no skip keys)", "").replace(" + skip ", " skip ")
+        labels.append(short)
+        off_vals.append(off_psnr)
+        on_vals.append(on_psnr)
+
+    if not labels:
+        return None
+
+    fig, ax = plt.subplots(figsize=(12, max(4, len(labels) * 0.8)))
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.set_facecolor("#16213e")
+
+    y = range(len(labels))
+    bar_h = 0.35
+    y_off = [i - bar_h / 2 for i in y]
+    y_on = [i + bar_h / 2 for i in y]
+
+    ax.barh(y_off, off_vals, height=bar_h, color="#6aaa64", alpha=0.85, label="Matmul OFF")
+    ax.barh(y_on, on_vals, height=bar_h, color="#e76f51", alpha=0.85, label="Matmul ON")
+
+    for i in range(len(labels)):
+        ax.text(off_vals[i] + 0.15, y_off[i], f"{off_vals[i]:.2f}", va="center",
+                color="#e0e0e0", fontsize=7.5, fontfamily="monospace")
+        ax.text(on_vals[i] + 0.15, y_on[i], f"{on_vals[i]:.2f}", va="center",
+                color="#e0e0e0", fontsize=7.5, fontfamily="monospace")
+
+    ax.set_yticks(list(y))
+    ax.set_yticklabels(labels, color="#e0e0e0", fontsize=9)
+    ax.set_xlabel("Mean PSNR (dB)", color="#e0e0e0", fontsize=11)
+    ax.set_title("Quantized Matmul: OFF vs ON — PSNR Comparison",
+                 color="#00b4d8", fontsize=13, pad=10)
+    ax.tick_params(colors="#a0a0a0")
+    for spine in ax.spines.values():
+        spine.set_color("#333")
+    ax.grid(True, axis="x", alpha=0.15, color="#555")
+    ax.invert_yaxis()
+    ax.legend(fontsize=9, loc="lower right", framealpha=0.7,
+              labelcolor="#e0e0e0", facecolor="#16213e", edgecolor="#444")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=140, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+## ── SVD + Quantized Matmul interaction comparison ────────────────────────
+
+# Each tuple: (label, matmul_only_name, svd_matmul_name, svd_only_name_or_None)
+# Shows the effect of adding SVD compression to quantized matmul inference.
+# SVD is applied as a float-precision additive correction in the matmul function:
+#   output = quantized_mm(input, W_residual) + input @ svd_down @ svd_up
+SVD_FIX_COMPARISONS = [
+    # Per-layer SVD configs
+    ("int8 skip-sensitive + per-layer SVD",
+     "int8 skip-sensitive + per-layer SVD + matmul (pre matmul SVD fix)",
+     "int8 skip-sensitive + per-layer SVD + matmul",
+     "int8 skip-sensitive + per-layer SVD"),
+    ("uint8 skip-sensitive + per-layer SVD",
+     "uint8 skip-sensitive + matmul (pre matmul SVD fix)",
+     "uint8 skip-sensitive + per-layer SVD + matmul",
+     "uint8 skip-sensitive + per-layer SVD"),
+    # Comprehensive SVD + matmul tests
+    ("int8",
+     "int8 + quantized matmul",
+     "int8 + SVD + matmul",
+     "int8 + SVD only"),
+    ("uint8",
+     "uint8 + quantized matmul",
+     "uint8 + SVD + matmul",
+     "uint8 + SVD only"),
+    ("int8 skip adaLN+attn",
+     "int8 skip adaLN+attn + quantized matmul",
+     "int8 skip adaLN+attn + SVD + matmul",
+     "int8 skip adaLN+attn + SVD only"),
+    ("uint8 skip adaLN+attn",
+     "uint8 skip adaLN+attn + quantized matmul",
+     "uint8 skip adaLN+attn + SVD + matmul",
+     "uint8 skip adaLN+attn + SVD only"),
+    ("uint8 skip-sensitive",
+     "uint8 skip embed+adaLN+final + quantized matmul",
+     "uint8 skip-sensitive + SVD + matmul",
+     "uint8 skip-sensitive + SVD only"),
+    ("int8 skip-sensitive",
+     "int8 + skip embed+adaLN+final + matmul",
+     "int8 skip-sensitive + SVD + matmul",
+     "int8 skip-sensitive + SVD only"),
+    ("uint4",
+     "uint4 + quantized matmul",
+     "uint4 + SVD + matmul",
+     "uint4 + SVD only"),
+    ("uint4 autoconfig",
+     "uint4 auto-config enhanced + quantized matmul",
+     "uint4 autoconfig + SVD + matmul",
+     "uint4 autoconfig + SVD only"),
+]
+
+
+def build_svd_fix_chart(tests_summary):
+    """Build grouped horizontal bar chart: SVD-only vs matmul-only vs SVD+matmul."""
+    labels = []
+    baseline_vals = []
+    pre_vals = []
+    post_vals = []
+    has_baseline = False
+
+    for label, matmul_name, svd_matmul_name, baseline_name in SVD_FIX_COMPARISONS:
+        matmul_psnr = _mean_metric(tests_summary.get(matmul_name, []), "psnr")
+        svd_matmul_psnr = _mean_metric(tests_summary.get(svd_matmul_name, []), "psnr")
+        if matmul_psnr is None and svd_matmul_psnr is None:
+            continue
+        labels.append(label)
+        pre_vals.append(matmul_psnr)
+        post_vals.append(svd_matmul_psnr)
+        bl = _mean_metric(tests_summary.get(baseline_name, []), "psnr") if baseline_name else None
+        baseline_vals.append(bl)
+        if bl is not None:
+            has_baseline = True
+
+    if not labels:
+        return None
+
+    fig, ax = plt.subplots(figsize=(12, max(4, len(labels) * 1.2)))
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.set_facecolor("#16213e")
+
+    n_bars = 3 if has_baseline else 2
+    bar_h = 0.8 / n_bars
+    y = list(range(len(labels)))
+
+    if has_baseline:
+        y_bl = [i - bar_h for i in y]
+        y_pre = [i for i in y]
+        y_post = [i + bar_h for i in y]
+        for i, v in enumerate(baseline_vals):
+            if v is not None:
+                ax.barh(y_bl[i], v, height=bar_h, color="#48cae4", alpha=0.85,
+                        label="SVD only (no matmul)" if i == 0 else "")
+                ax.text(v + 0.15, y_bl[i], f"{v:.2f}", va="center",
+                        color="#e0e0e0", fontsize=7.5, fontfamily="monospace")
+    else:
+        y_pre = [i - bar_h / 2 for i in y]
+        y_post = [i + bar_h / 2 for i in y]
+
+    for i in range(len(labels)):
+        if pre_vals[i] is not None:
+            ax.barh(y_pre[i], pre_vals[i], height=bar_h, color="#e76f51", alpha=0.85,
+                    label="Matmul only (no SVD)" if i == 0 else "")
+            ax.text(pre_vals[i] + 0.15, y_pre[i], f"{pre_vals[i]:.2f}", va="center",
+                    color="#e0e0e0", fontsize=7.5, fontfamily="monospace")
+        if post_vals[i] is not None:
+            ax.barh(y_post[i], post_vals[i], height=bar_h, color="#40916c", alpha=0.85,
+                    label="SVD + matmul" if i == 0 else "")
+            ax.text(post_vals[i] + 0.15, y_post[i], f"{post_vals[i]:.2f}", va="center",
+                    color="#e0e0e0", fontsize=7.5, fontfamily="monospace")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, color="#e0e0e0", fontsize=10)
+    ax.set_xlabel("Mean PSNR (dB)", color="#e0e0e0", fontsize=11)
+    ax.set_title("SVD Effect on Quantized Matmul — PSNR Comparison",
+                 color="#00b4d8", fontsize=13, pad=10)
+    ax.tick_params(colors="#a0a0a0")
+    for spine in ax.spines.values():
+        spine.set_color("#333")
+    ax.grid(True, axis="x", alpha=0.15, color="#555")
+    ax.invert_yaxis()
+    ax.legend(fontsize=9, loc="lower right", framealpha=0.7,
+              labelcolor="#e0e0e0", facecolor="#16213e", edgecolor="#444")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=140, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def build_svd_fix_section_html(tests_summary, chart_b64):
+    """Build the SVD + matmul interaction comparison HTML section."""
+    table_rows = ""
+    deltas = []
+
+    for label, matmul_name, svd_matmul_name, baseline_name in SVD_FIX_COMPARISONS:
+        pre_rows = tests_summary.get(matmul_name, [])
+        post_rows = tests_summary.get(svd_matmul_name, [])
+        bl_rows = tests_summary.get(baseline_name, []) if baseline_name else []
+        pre_psnr = _mean_metric(pre_rows, "psnr")
+        post_psnr = _mean_metric(post_rows, "psnr")
+        bl_psnr = _mean_metric(bl_rows, "psnr") if bl_rows else None
+        pre_ssim = _mean_metric(pre_rows, "ssim")
+        post_ssim = _mean_metric(post_rows, "ssim")
+        bl_ssim = _mean_metric(bl_rows, "ssim") if bl_rows else None
+        pre_lpips = _mean_metric(pre_rows, "lpips")
+        post_lpips = _mean_metric(post_rows, "lpips")
+        bl_lpips = _mean_metric(bl_rows, "lpips") if bl_rows else None
+
+        if pre_psnr is None and post_psnr is None:
+            continue
+
+        # Baseline cells
+        if bl_psnr is not None:
+            bl_cells = (f'<td class="metric">{bl_psnr:.2f}</td>'
+                        f'<td class="metric">{bl_ssim:.4f}</td>'
+                        f'<td class="metric">{bl_lpips:.4f}</td>')
+        else:
+            bl_cells = '<td class="metric">\u2014</td>' * 3
+
+        # Pre-fix cells
+        if pre_psnr is not None:
+            pre_cells = (f'<td class="metric">{pre_psnr:.2f}</td>'
+                         f'<td class="metric">{pre_ssim:.4f}</td>'
+                         f'<td class="metric">{pre_lpips:.4f}</td>')
+        else:
+            pre_cells = '<td class="metric">\u2014</td>' * 3
+
+        # Post-fix cells
+        if post_psnr is not None:
+            post_cells = (f'<td class="metric">{post_psnr:.2f}</td>'
+                          f'<td class="metric">{post_ssim:.4f}</td>'
+                          f'<td class="metric">{post_lpips:.4f}</td>')
+        else:
+            post_cells = '<td class="metric">\u2014</td>' * 3
+
+        # Delta cells
+        if pre_psnr is not None and post_psnr is not None:
+            d_psnr = post_psnr - pre_psnr
+            d_ssim = (post_ssim - pre_ssim) if (post_ssim is not None and pre_ssim is not None) else None
+            deltas.append((label, d_psnr))
+            psnr_cls = "ok" if d_psnr >= 0 else "bad"
+            ssim_cls = "ok" if d_ssim is not None and d_ssim >= 0 else "bad"
+            delta_cells = (f'<td class="metric {psnr_cls}">{d_psnr:+.2f}</td>'
+                           f'<td class="metric {ssim_cls}">{d_ssim:+.4f}</td>')
+        else:
+            delta_cells = '<td class="metric">\u2014</td>' * 2
+
+        table_rows += f"<tr>\n    <td>{esc(label)}</td>\n    {bl_cells}\n    {pre_cells}\n    {post_cells}\n    {delta_cells}\n</tr>\n"
+
+    if not table_rows:
+        return ""
+
+    # Verdict
+    if deltas:
+        avg_delta = sum(d for _, d in deltas) / len(deltas)
+        best = max(deltas, key=lambda x: x[1])
+        verdict = (f"SVD compression applied as a float-precision additive correction during quantized matmul: "
+                   f"<code>output = quantized_mm(input, W_residual) + input @ svd_down @ svd_up</code>. "
+                   f"Average PSNR change from adding SVD to matmul: <strong>{avg_delta:+.2f} dB</strong>. "
+                   f"Largest gain: <strong>{best[0]}</strong> ({best[1]:+.2f} dB).")
+    else:
+        verdict = ""
+
+    chart_html = ""
+    if chart_b64:
+        chart_html = f'<div class="chart-section"><img src="data:image/png;base64,{chart_b64}" alt="SVD + matmul comparison chart"></div>'
+
+    return f"""<h2 id="svd-matmul-interaction">SVD Effect on Quantized Matmul</h2>
+<p style="color:var(--text-dim);font-size:0.9rem;margin-bottom:1rem;">{verdict}</p>
+<p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:1rem;">
+When <code>use_quantized_matmul</code> is enabled, weights are re-quantized to int8/fp8 at runtime for fast
+matrix multiplication. SVD compression stores the weight as <code>W = W_residual + svd_down @ svd_up</code>,
+where <code>W_residual</code> is quantized and the SVD correction is applied in float precision during inference.
+This table compares matmul-only (no SVD) against SVD+matmul to measure the quality improvement from SVD correction.</p>
+<table class="summary-table">
+<thead><tr>
+    <th>Configuration</th>
+    <th colspan="3" style="text-align:center">SVD only (no matmul)</th>
+    <th colspan="3" style="text-align:center">Matmul only (no SVD)</th>
+    <th colspan="3" style="text-align:center">SVD + matmul</th>
+    <th>\u0394 PSNR</th><th>\u0394 SSIM</th>
+</tr>
+<tr>
+    <th></th>
+    <th>PSNR</th><th>SSIM</th><th>LPIPS</th>
+    <th>PSNR</th><th>SSIM</th><th>LPIPS</th>
+    <th>PSNR</th><th>SSIM</th><th>LPIPS</th>
+    <th></th><th></th>
+</tr></thead>
+<tbody>
+{table_rows}</tbody>
+</table>
+{chart_html}
+"""
+
+
+def build_matmul_section_html(tests_summary, matmul_chart_b64):
+    """Build the matmul comparison HTML section with table, chart, and summary."""
+    # Build comparison table rows
+    table_rows = ""
+    deltas_psnr = []
+    deltas_ssim = []
+
+    for off_name, on_name in MATMUL_PAIRS:
+        if off_name not in tests_summary or on_name not in tests_summary:
+            continue
+        off_psnr = _mean_metric(tests_summary[off_name], "psnr")
+        on_psnr = _mean_metric(tests_summary[on_name], "psnr")
+        off_ssim = _mean_metric(tests_summary[off_name], "ssim")
+        on_ssim = _mean_metric(tests_summary[on_name], "ssim")
+        off_lpips = _mean_metric(tests_summary[off_name], "lpips")
+        on_lpips = _mean_metric(tests_summary[on_name], "lpips")
+        if off_psnr is None or on_psnr is None:
+            continue
+
+        d_psnr = on_psnr - off_psnr
+        d_ssim = (on_ssim - off_ssim) if (on_ssim is not None and off_ssim is not None) else None
+        deltas_psnr.append((off_name, d_psnr))
+        if d_ssim is not None:
+            deltas_ssim.append((off_name, d_ssim))
+
+        psnr_cls = "ok" if d_psnr >= 0 else "bad"
+        ssim_cls = "ok" if d_ssim is not None and d_ssim >= 0 else "bad"
+        sign_p = "+" if d_psnr >= 0 else ""
+        sign_s = "+" if d_ssim is not None and d_ssim >= 0 else ""
+
+        short = off_name.replace(" (no skip keys)", "").replace(" + skip ", " skip ")
+        table_rows += f"""<tr>
+    <td>{esc(short)}</td>
+    <td class="metric">{off_psnr:.2f}</td>
+    <td class="metric">{off_ssim:.4f}</td>
+    <td class="metric">{off_lpips:.4f}</td>
+    <td class="metric">{on_psnr:.2f}</td>
+    <td class="metric">{on_ssim:.4f}</td>
+    <td class="metric">{on_lpips:.4f}</td>
+    <td class="metric {psnr_cls}">{sign_p}{d_psnr:.2f}</td>
+    <td class="metric {ssim_cls}">{sign_s}{d_ssim:.4f}</td>
+</tr>\n"""
+
+    if not table_rows:
+        return ""
+
+    # Summary verdict
+    avg_delta = sum(d for _, d in deltas_psnr) / len(deltas_psnr)
+    if avg_delta < 0:
+        verdict = (f"Quantized matmul degrades quality for most tested configurations. "
+                   f"Average PSNR change: {avg_delta:+.2f} dB.")
+    elif avg_delta > 0.1:
+        verdict = (f"Quantized matmul improves quality on average. "
+                   f"Average PSNR change: {avg_delta:+.2f} dB.")
+    else:
+        verdict = (f"Quantized matmul has minimal impact on quality. "
+                   f"Average PSNR change: {avg_delta:+.2f} dB.")
+
+    # Best/worst pair
+    best_pair = max(deltas_psnr, key=lambda x: x[1])
+    worst_pair = min(deltas_psnr, key=lambda x: x[1])
+    verdict += (f"<br>Most matmul-tolerant: <strong>{best_pair[0]}</strong> ({best_pair[1]:+.2f} dB). "
+                f"Most matmul-sensitive: <strong>{worst_pair[0]}</strong> ({worst_pair[1]:+.2f} dB).")
+
+    chart_html = ""
+    if matmul_chart_b64:
+        chart_html = f'<div class="chart-section"><img src="data:image/png;base64,{matmul_chart_b64}" alt="Matmul comparison chart"></div>'
+
+    return f"""<h2 id="matmul-comparison">Quantized Matmul: ON vs OFF Comparison</h2>
+<p style="color:var(--text-dim);font-size:0.9rem;margin-bottom:1rem;">{verdict}</p>
+<table class="summary-table">
+<thead><tr>
+    <th>Configuration</th>
+    <th colspan="3" style="text-align:center">Matmul OFF</th>
+    <th colspan="3" style="text-align:center">Matmul ON</th>
+    <th>\u0394 PSNR</th><th>\u0394 SSIM</th>
+</tr>
+<tr>
+    <th></th>
+    <th>PSNR</th><th>SSIM</th><th>LPIPS</th>
+    <th>PSNR</th><th>SSIM</th><th>LPIPS</th>
+    <th></th><th></th>
+</tr></thead>
+<tbody>
+{table_rows}</tbody>
+</table>
+{chart_html}
+"""
+
+
 def main():
     from datetime import datetime
+
+    args = parse_args()
+
+    # ── Resolve directories and test definitions ─────────────────────────────
+    base_dir = Path(args.base_dir) if args.base_dir else BASE_DIR
+    fp16_dir = Path(args.fp16_dir) if args.fp16_dir else FP16_DIR
+
+    if args.test_defs:
+        with open(args.test_defs, encoding="utf-8") as f:
+            test_defs_json = json.load(f)
+        tests = [
+            (t["name"], t["csv_stem"], t["output_dir"], t["label"], t["category"])
+            for t in test_defs_json
+        ]
+    else:
+        tests = TESTS
 
     # ── Load memory data ─────────────────────────────────────────────────────
     memory_data = load_memory_data()
@@ -403,10 +889,10 @@ def main():
     tests_steps = {}    # name -> list of step row dicts
     tests_images = {}   # name -> [(prompt_idx, seed, fp16_b64, quant_b64)]
 
-    for name, csv_stem, output_dir, _section, _cat in TESTS:
-        csv_path = BASE_DIR / f"{csv_stem}.csv"
-        steps_path = BASE_DIR / f"{csv_stem}_steps.csv"
-        quant_dir = BASE_DIR / output_dir / "quantized"
+    for name, csv_stem, output_dir, _section, _cat in tests:
+        csv_path = base_dir / f"{csv_stem}.csv"
+        steps_path = base_dir / f"{csv_stem}_steps.csv"
+        quant_dir = base_dir / output_dir / "quantized"
 
         if not csv_path.exists():
             print(f"  SKIP {name}: {csv_path} not found")
@@ -423,7 +909,7 @@ def main():
         for row in rows:
             p_idx = int(row["prompt_idx"])
             seed = int(row["seed"])
-            fp16_img = FP16_DIR / "fp16" / f"prompt_{p_idx}_seed_{seed}" / "final_image.png"
+            fp16_img = fp16_dir / "fp16" / f"prompt_{p_idx}_seed_{seed}" / "final_image.png"
             quant_img = quant_dir / f"prompt_{p_idx}_seed_{seed}" / "final_image.png"
             if fp16_img.exists() and quant_img.exists():
                 pairs.append({
@@ -446,10 +932,14 @@ def main():
     lpips_chart_b64 = build_bar_chart(tests_summary, "lpips", "Mean LPIPS")
     efficiency_chart_b64 = build_efficiency_chart(memory_data, tests_summary) if memory_data else None
     memory_chart_b64 = build_memory_bar_chart(memory_data, tests_summary) if memory_data else None
+    matmul_chart_b64 = build_matmul_comparison_chart(tests_summary)
+    matmul_section_html = build_matmul_section_html(tests_summary, matmul_chart_b64)
+    svd_fix_chart_b64 = build_svd_fix_chart(tests_summary)
+    svd_fix_section_html = build_svd_fix_section_html(tests_summary, svd_fix_chart_b64)
 
     # ── Compute summary table ────────────────────────────────────────────────
     summary_rows = []
-    for name, csv_stem, _output_dir, section, cat in TESTS:
+    for name, csv_stem, _output_dir, section, cat in tests:
         if name not in tests_summary:
             continue
         rows = tests_summary[name]
@@ -492,11 +982,20 @@ def main():
         lpips_chart_b64=lpips_chart_b64,
         efficiency_chart_b64=efficiency_chart_b64,
         memory_chart_b64=memory_chart_b64,
+        matmul_section_html=matmul_section_html,
+        svd_fix_section_html=svd_fix_section_html,
         has_memory=bool(memory_data),
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
-    out_path = BASE_DIR / "ref2_combined_report.html"
+    if args.output:
+        out_path = Path(args.output)
+    elif args.test_defs:
+        # Derive output name from test defs filename
+        stem = Path(args.test_defs).stem.replace("_test_defs", "")
+        out_path = base_dir / f"{stem}_combined_report.html"
+    else:
+        out_path = base_dir / "ref2_combined_report.html"
     out_path.write_text(html, encoding="utf-8")
     print(f"Report written to {out_path}")
 
@@ -604,6 +1103,43 @@ def build_findings_html(summary_rows):
                     f'text-encoder-only <span class="{cls_e}">{format(tenc[key], f)}{unit}</span></li>'
                 )
 
+        # Matmul ON vs OFF impact
+        matmul_deltas = []
+        for off_name, on_name in MATMUL_PAIRS:
+            off_row = next((r for r in valid if r["name"] == off_name), None)
+            on_row = next((r for r in valid if r["name"] == on_name), None)
+            if off_row and on_row:
+                delta = on_row[key] - off_row[key]
+                matmul_deltas.append((off_name, off_row[key], on_row[key], delta))
+
+        if matmul_deltas:
+            best_matmul = best_fn(matmul_deltas, key=lambda x: x[3])
+            worst_matmul = worst_fn(matmul_deltas, key=lambda x: x[3])
+            avg_d = sum(d for _, _, _, d in matmul_deltas) / len(matmul_deltas)
+            sign_avg = "+" if avg_d >= 0 else ""
+            avg_cls = "ok" if (avg_d >= 0) == hb else "bad"
+            items.append(
+                f'<li><span class="highlight">Quantized matmul avg impact:</span> '
+                f'<span class="{avg_cls}">{sign_avg}{format(avg_d, f)}{unit}</span> '
+                f'across {len(matmul_deltas)} configs</li>'
+            )
+            best_sign = "+" if best_matmul[3] >= 0 else ""
+            best_cls = "ok" if (best_matmul[3] >= 0) == hb else "bad"
+            items.append(
+                f'<li><span class="highlight">Most matmul-tolerant:</span> '
+                f'{best_matmul[0]} '
+                f'<span class="{best_cls}">{best_sign}{format(best_matmul[3], f)}{unit}</span> '
+                f'({format(best_matmul[1], f)} \u2192 {format(best_matmul[2], f)})</li>'
+            )
+            worst_sign = "+" if worst_matmul[3] >= 0 else ""
+            worst_cls = "ok" if (worst_matmul[3] >= 0) == hb else "bad"
+            items.append(
+                f'<li><span class="highlight">Most matmul-sensitive:</span> '
+                f'{worst_matmul[0]} '
+                f'<span class="{worst_cls}">{worst_sign}{format(worst_matmul[3], f)}{unit}</span> '
+                f'({format(worst_matmul[1], f)} \u2192 {format(worst_matmul[2], f)})</li>'
+            )
+
         findings[metric] = "\n        ".join(items)
 
     return findings
@@ -612,7 +1148,7 @@ def build_findings_html(summary_rows):
 def render_html(*, summary_rows, tests_summary, tests_images,
                 error_chart_b64, psnr_chart_b64, ssim_chart_b64,
                 lpips_chart_b64, efficiency_chart_b64, memory_chart_b64,
-                has_memory, timestamp):
+                matmul_section_html, svd_fix_section_html, has_memory, timestamp):
     """Build the full HTML string."""
 
     # ── Summary table rows ───────────────────────────────────────────────────
@@ -649,6 +1185,7 @@ def render_html(*, summary_rows, tests_summary, tests_images,
             if lpg is not None:
                 data_attrs += f' data-lpips-per-gb="{lpg:.4f}"'
             data_attrs += f' data-name="{esc(r["name"])}"'
+            data_attrs += f' data-precision="{get_precision(r["name"])}"'
             if has_memory:
                 if qgb is not None:
                     sav_class = "excellent" if sav >= 60 else "good" if sav >= 40 else "fair" if sav >= 20 else "poor"
@@ -679,7 +1216,7 @@ def render_html(*, summary_rows, tests_summary, tests_images,
         rows = tests_summary[name]
         pairs = tests_images.get(name, [])
 
-        details_html += f'<div class="test-block" id="test-{css_id(name)}">\n'
+        details_html += f'<div class="test-block" id="test-{css_id(name)}" data-precision="{get_precision(name)}">\n'
         details_html += f'<h3>{name}</h3>\n'
         details_html += '<table class="detail-table"><thead><tr>'
         details_html += '<th>Prompt</th><th>Seed</th><th>PSNR</th><th>SSIM</th><th>LPIPS</th>'
@@ -727,6 +1264,8 @@ def render_html(*, summary_rows, tests_summary, tests_images,
 
     # ── Build conditional HTML fragments ─────────────────────────────────────
     memory_nav_link = '<a href="#memory-charts">Memory</a>' if has_memory else ""
+    matmul_nav_link = '<a href="#matmul-comparison">Matmul Comparison</a>' if matmul_section_html else ""
+    svd_fix_nav_link = '<a href="#svd-fix-comparison">SVD Fix</a>' if svd_fix_section_html else ""
     memory_th = '<th>Size (GB)</th><th>Savings</th><th id="eff-header">PSNR/GB</th>' if has_memory else ""
 
     if has_memory:
@@ -781,6 +1320,14 @@ def render_html(*, summary_rows, tests_summary, tests_images,
             f'    <ul>\n        {content}\n    </ul>\n'
             f'</div>\n'
         )
+
+    # ── Precision filter buttons ─────────────────────────────────────────────
+    prec_order = ["int8", "uint8", "uint4", "fp8", "other"]
+    present_precs = [p for p in prec_order if any(get_precision(r["name"]) == p for r in summary_rows)]
+    prec_buttons = '<button class="active" data-prec="all">All</button>'
+    for p in present_precs:
+        prec_buttons += f'<button data-prec="{p}">{p}</button>'
+    precision_filter_html = f'<div class="metric-selector precision-filter">{prec_buttons}</div>'
 
     # ── Assemble ─────────────────────────────────────────────────────────────
     return f"""<!DOCTYPE html>
@@ -888,6 +1435,8 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
     <a href="#summary">Summary Table</a>
     <a href="#charts">Charts</a>
     {memory_nav_link}
+    {matmul_nav_link}
+    {svd_fix_nav_link}
     <a href="#error-chart">Error Accumulation</a>
     <a href="#details">Detailed Results</a>
     <a href="#findings">Key Findings</a>
@@ -895,8 +1444,10 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
 
 <div class="header" id="overview">
     <h1>Z-Image Quantization Ablation Report</h1>
-    <p class="meta">Model: <strong>Tongyi-MAI/Z-Image</strong> | Generated: {timestamp} | {len(summary_rows)} configurations | 2 prompts &times; seed 42 | 20 steps | bf16 baseline | CPU offload | No skip keys</p>
+    <p class="meta">Model: <strong>Tongyi-MAI/Z-Image</strong> | Generated: {timestamp} | <span id="config-count">{len(summary_rows)}</span> configurations | 2 prompts &times; seed 42 | 20 steps | bf16 baseline | CPU offload | No skip keys</p>
 </div>
+
+{precision_filter_html}
 
 <div class="stats-row">
     <div class="stat-card" id="best-card">
@@ -956,6 +1507,10 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
 
 {error_chart_html}
 
+{matmul_section_html}
+
+{svd_fix_section_html}
+
 <h2 id="details">Detailed Results Per Configuration</h2>
 {details_html}
 
@@ -966,6 +1521,8 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
 </div>
 <script>
 (function() {{
+    let currentPrecision = "all";
+
     const METRICS = {{
         psnr:        {{ attr: "psnr", label: "PSNR", unit: "dB", higherBetter: true,
                         fmt: v => v.toFixed(2), baseMetric: "psnr",
@@ -1003,6 +1560,10 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
         poor: "var(--orange)", terrible: "var(--red)"
     }};
 
+    function isRowVisible(row) {{
+        return currentPrecision === "all" || row.dataset.precision === currentPrecision;
+    }}
+
     function switchMetric(metric) {{
         const m = METRICS[metric];
         if (!m) return;
@@ -1032,21 +1593,25 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
             }});
         }}
 
-        // Collect all data row values for bar scaling
+        // Collect visible data row values for bar scaling
         const allVals = [];
         for (const g of groups) {{
             for (const row of g.dataRows) {{
+                if (!isRowVisible(row)) continue;
                 const v = parseFloat(row.dataset[toCamel(m.attr)]);
                 if (!isNaN(v)) allVals.push(v);
             }}
         }}
         const maxVal = Math.max(...allVals, 1e-9);
 
-        // Rebuild tbody in sorted order and update cells
+        // Rebuild tbody in sorted order, apply precision visibility, and update cells
         tbody.innerHTML = "";
         for (const g of groups) {{
+            const hasVisible = g.dataRows.some(r => isRowVisible(r));
+            g.header.style.display = hasVisible ? "" : "none";
             tbody.appendChild(g.header);
             for (const row of g.dataRows) {{
+                row.style.display = isRowVisible(row) ? "" : "none";
                 const val = parseFloat(row.dataset[toCamel(m.attr)]);
                 const cls = isNaN(val) ? "" : classify(val, metric);
 
@@ -1055,25 +1620,16 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
                     const col = td.dataset.col;
                     // Remove old quality classes
                     td.classList.remove("excellent", "good", "fair", "poor", "terrible");
-                    // Apply class to the column matching the active metric
-                    if (col === metric.replace("_per_gb", "_per_gb") && !isNaN(val)) {{
-                        // Color the cell of the selected metric
-                    }}
                     if (col === metric && !isNaN(val)) {{
                         td.classList.add(cls);
-                    }} else if (col === "psnr" && metric !== "psnr") {{
-                        // Keep psnr uncolored when not selected
                     }}
                 }}
 
                 // Update bar
                 const barTd = row.querySelector("td[data-col='bar']");
                 if (barTd && !isNaN(val)) {{
-                    const pct = Math.min((val / maxVal) * 100, 100);
                     const barDiv = barTd.querySelector(".bar");
                     if (barDiv) {{
-                        // For LPIPS, invert: best (lowest) gets longest bar
-                        const barPct = m.higherBetter ? pct : Math.min(((maxVal - val + allVals.reduce((a,b)=>Math.min(a,b), Infinity)) / maxVal) * 100, 100);
                         const displayPct = m.higherBetter
                             ? Math.min((val / maxVal) * 100, 100)
                             : Math.min(((1 - val / maxVal) + 0.02) * 100, 100);
@@ -1086,13 +1642,14 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
             }}
         }}
 
-        // Update best/worst stat cards
+        // Update best/worst stat cards from visible rows only
         if (allVals.length > 0) {{
             let bestRow = null, worstRow = null;
             let bestVal = m.higherBetter ? -Infinity : Infinity;
             let worstVal = m.higherBetter ? Infinity : -Infinity;
             for (const g of groups) {{
                 for (const row of g.dataRows) {{
+                    if (!isRowVisible(row)) continue;
                     const v = parseFloat(row.dataset[toCamel(m.attr)]);
                     if (isNaN(v)) continue;
                     if (m.higherBetter ? v > bestVal : v < bestVal) {{
@@ -1123,6 +1680,10 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
                 wn.textContent = worstRow.dataset.name || "";
             }}
         }}
+
+        // Update config count
+        const countEl = document.getElementById("config-count");
+        if (countEl) countEl.textContent = allVals.length;
 
         // Update efficiency column header + cells
         const effHeader = document.getElementById("eff-header");
@@ -1158,23 +1719,50 @@ h3 {{ color: var(--accent2); margin: 1.5rem 0 0.75rem; font-size: 1.15rem; }}
             div.style.display = div.id === "findings-" + baseMet ? "" : "none";
         }});
 
-        // Update active button
-        document.querySelectorAll(".metric-selector button").forEach(btn => {{
+        // Update active metric button (not precision buttons)
+        document.querySelectorAll(".metric-selector:not(.precision-filter) button").forEach(btn => {{
             btn.classList.toggle("active", btn.dataset.metric === metric);
         }});
+    }}
+
+    function switchPrecision(prec) {{
+        currentPrecision = prec;
+
+        // Update active precision button
+        document.querySelectorAll(".precision-filter button").forEach(btn => {{
+            btn.classList.toggle("active", btn.dataset.prec === prec);
+        }});
+
+        // Show/hide test-block detail sections
+        document.querySelectorAll(".test-block").forEach(block => {{
+            block.style.display = (prec === "all" || block.dataset.precision === prec) ? "" : "none";
+        }});
+
+        // Show/hide findings (hide when filtered since findings reference all configs)
+        const findingsEl = document.getElementById("findings");
+        if (findingsEl) {{
+            findingsEl.style.display = prec === "all" ? "" : "none";
+        }}
+
+        // Re-run metric switch to recalculate stats, sort, and visibility
+        const activeMetricBtn = document.querySelector(".metric-selector:not(.precision-filter) button.active");
+        const activeMetric = activeMetricBtn ? activeMetricBtn.dataset.metric : "psnr";
+        switchMetric(activeMetric);
     }}
 
     function toCamel(s) {{
         return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     }}
 
-    // Bind buttons
-    document.querySelectorAll(".metric-selector button").forEach(btn => {{
+    // Bind metric buttons
+    document.querySelectorAll(".metric-selector:not(.precision-filter) button").forEach(btn => {{
         btn.addEventListener("click", () => switchMetric(btn.dataset.metric));
     }});
 
-    // Apply initial coloring for PSNR (already set server-side, but ensures consistency)
-    // No action needed — server-side rendering handles initial state.
+    // Bind precision filter buttons
+    document.querySelectorAll(".precision-filter button").forEach(btn => {{
+        btn.addEventListener("click", () => switchPrecision(btn.dataset.prec));
+    }});
 }})();
 </script>
 </body>
@@ -1187,6 +1775,33 @@ def css_id(name):
 
 def esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def get_precision(name):
+    """Determine precision group from test name."""
+    low = name.lower()
+    if "float8" in low or "fp8" in low:
+        return "fp8"
+    if "uint8" in low:
+        return "uint8"
+    if "int8" in low:
+        return "int8"
+    if "uint4" in low or low.startswith("only "):
+        return "uint4"
+    return "other"
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Generate combined HTML report from quantization test results")
+    p.add_argument("--test-defs", default=None,
+                    help="JSON file with test definitions (overrides hardcoded TESTS)")
+    p.add_argument("--base-dir", default=None,
+                    help="Base directory for CSVs and result dirs (default: repo root)")
+    p.add_argument("--fp16-dir", default=None,
+                    help="FP16 baseline image directory (default: ref2_results)")
+    p.add_argument("--output", default=None,
+                    help="Output HTML path (default: <base-dir>/<prefix>_combined_report.html)")
+    return p.parse_args()
 
 
 if __name__ == "__main__":

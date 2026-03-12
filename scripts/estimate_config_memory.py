@@ -78,6 +78,24 @@ def build_layer_inventory(model):
     return inventory
 
 
+def _resolve_custom_class(model_id, comp_name, lib_name, class_name):
+    """Try to load a custom model class from a local modeling_*.py file."""
+    import importlib.util
+
+    subfolder_path = Path(model_id) / comp_name
+    if not subfolder_path.is_dir():
+        return None
+    for py_file in sorted(subfolder_path.glob("modeling_*.py")):
+        spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            cls = getattr(mod, class_name, None)
+            if cls is not None:
+                return cls
+    return None
+
+
 def load_component_inventory(model_id, comp_name, lib_name, class_name, cache_dir=None):
     """Load a single pipeline component on meta device and return its inventory."""
     if lib_name == "transformers":
@@ -85,12 +103,25 @@ def load_component_inventory(model_id, comp_name, lib_name, class_name, cache_di
         config = AutoConfig.from_pretrained(model_id, subfolder=comp_name, cache_dir=cache_dir)
         with init_empty_weights():
             model = AutoModel.from_config(config)
-    else:
-        config_path = hf_hub_download(model_id, f"{comp_name}/config.json", cache_dir=cache_dir)
+    elif lib_name == "diffusers":
+        local_cfg = Path(model_id) / comp_name / "config.json"
+        config_path = str(local_cfg) if local_cfg.exists() else hf_hub_download(model_id, f"{comp_name}/config.json", cache_dir=cache_dir)
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         lib = __import__(lib_name, fromlist=[class_name])
         cls = getattr(lib, class_name)
+        with init_empty_weights():
+            model = cls.from_config(config)
+    else:
+        # Custom model class: load from local modeling_*.py
+        cls = _resolve_custom_class(model_id, comp_name, lib_name, class_name)
+        if cls is None:
+            raise ValueError(f"Could not resolve custom class '{class_name}' from '{lib_name}'")
+        config_path = Path(model_id) / comp_name / "config.json"
+        if not config_path.exists():
+            config_path = hf_hub_download(model_id, f"{comp_name}/config.json", cache_dir=cache_dir)
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
         with init_empty_weights():
             model = cls.from_config(config)
 
@@ -101,7 +132,11 @@ def load_component_inventory(model_id, comp_name, lib_name, class_name, cache_di
 
 def load_all_inventories(model_id, cache_dir=None):
     """Load model_index.json and build inventories for all model components."""
-    index_path = hf_hub_download(model_id, "model_index.json", cache_dir=cache_dir)
+    local_index = Path(model_id) / "model_index.json"
+    if local_index.exists():
+        index_path = str(local_index)
+    else:
+        index_path = hf_hub_download(model_id, "model_index.json", cache_dir=cache_dir)
     with open(index_path, encoding="utf-8") as f:
         model_index = json.load(f)
 
@@ -118,7 +153,7 @@ def load_all_inventories(model_id, cache_dir=None):
         lib_name, class_name = value
         if not lib_name or not class_name:
             continue
-        if lib_name not in ("diffusers", "transformers"):
+        if lib_name not in ("diffusers", "transformers") and not lib_name.startswith("modeling_"):
             continue
         if class_name in non_model_classes:
             continue
@@ -417,22 +452,51 @@ ALL_TESTS = [
     (23, "uint4 hybrid u8attn+SVD",       "ref2_uint4_hybrid_u8attn_svd.json",   "ref2_uint4_hybrid_u8attn_svd_report.csv"),
     (24, "uint4 kitchen sink",            "ref2_uint4_kitchen_sink.json",        "ref2_uint4_kitchen_sink_report.csv"),
     (25, "uint4 auto-config enhanced",    "ref2_uint4_autoconfig_enhanced.json", "ref2_uint4_autoconfig_enhanced_report.csv"),
+    # Phase 4: Runtime & Dtype Ablation (26-39)
+    (26, "int8 + quantized matmul",      "ablation_int8_quantized_matmul.json",       "ablation_int8_quantized_matmul_report.csv"),
+    (27, "int8 + dequantize FP32",       "ablation_int8_dequant_fp32.json",           "ablation_int8_dequant_fp32_report.csv"),
+    (28, "int8 + stochastic rounding",   "ablation_int8_stochastic_rounding.json",    "ablation_int8_stochastic_rounding_report.csv"),
+    (29, "uint4 MLP+SVD+stoch+FP32 (fixed)", "ablation_uint4_stochastic_rounding.json", "ablation_uint4_stochastic_rounding_report.csv"),
+    (30, "int8 group_size=64",           "ablation_int8_group64.json",                "ablation_int8_group64_report.csv"),
+    (31, "int8 tensorwise (g=-1)",       "ablation_int8_tensorwise.json",             "ablation_int8_tensorwise_report.csv"),
+    (32, "uint4 + quantized matmul",     "ablation_uint4_quantized_matmul.json",      "ablation_uint4_quantized_matmul_report.csv"),
+    (33, "uint4 + dequantize FP32",      "ablation_uint4_dequant_fp32.json",          "ablation_uint4_dequant_fp32_report.csv"),
+    (34, "uint4 group_size=64",          "ablation_uint4_group64.json",               "ablation_uint4_group64_report.csv"),
+    (35, "uint4 tensorwise (g=-1)",      "ablation_uint4_tensorwise.json",            "ablation_uint4_tensorwise_report.csv"),
+    (36, "uint4 + SVD rank 32",          "ablation_uint4_svd_rank32.json",            "ablation_uint4_svd_rank32_report.csv"),
+    (37, "uint4 + SVD rank 128",         "ablation_uint4_svd_rank128.json",           "ablation_uint4_svd_rank128_report.csv"),
+    (38, "uint4 + per-layer group size", "ablation_uint4_per_layer_group_size.json",  "ablation_uint4_per_layer_group_size_report.csv"),
+    (39, "uint4 + per-layer SVD",        "ablation_uint4_per_layer_svd.json",         "ablation_uint4_per_layer_svd_report.csv"),
 ]
 
 
 def get_test_configs(base_dir, filter_configs=None):
     """Build list of test config dicts, optionally filtered to specific JSON files."""
     configs = []
-    for test_num, label, config_json, report_csv in ALL_TESTS:
-        config_path = os.path.join(base_dir, config_json)
-        report_path = os.path.join(base_dir, report_csv)
 
-        if filter_configs and config_json not in filter_configs and config_path not in filter_configs:
-            continue
+    # Build lookup from ALL_TESTS for known configs
+    known = {config_json: (test_num, label, report_csv) for test_num, label, config_json, report_csv in ALL_TESTS}
 
+    # If filter_configs given, also include any that aren't in ALL_TESTS
+    config_list = filter_configs if filter_configs else [c for _, _, c, _ in ALL_TESTS]
+
+    for idx, config_ref in enumerate(config_list):
+        config_json = os.path.basename(config_ref)
+        config_path = os.path.join(base_dir, config_json) if not os.path.isabs(config_ref) else config_ref
         if not os.path.exists(config_path):
-            print(f"  Warning: config not found: {config_json}")
+            config_path = os.path.join(base_dir, config_ref)
+        if not os.path.exists(config_path):
+            print(f"  Warning: config not found: {config_ref}")
             continue
+
+        if config_json in known:
+            test_num, label, report_csv_name = known[config_json]
+            report_path = os.path.join(base_dir, report_csv_name)
+        else:
+            test_num = idx + 1
+            label = config_json.replace(".json", "")
+            report_csv_name = config_json.replace(".json", "_report.csv")
+            report_path = os.path.join(base_dir, report_csv_name)
 
         with open(config_path, encoding="utf-8") as f:
             pipeline_config = json.load(f)
@@ -582,7 +646,7 @@ def parse_args():
                          "(default: repo root)")
     p.add_argument("--configs", nargs="*", default=None,
                     help="Specific config JSON filenames to process "
-                         "(default: all 25 tests)")
+                         "(default: all tests)")
     p.add_argument("--output", default=None,
                     help="Output CSV path (default: memory_comparison.csv in config-dir)")
     return p.parse_args()
