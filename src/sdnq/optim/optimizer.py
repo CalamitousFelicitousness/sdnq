@@ -2,7 +2,6 @@ from collections import defaultdict
 from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from itertools import chain
-from typing import Any
 
 import torch
 

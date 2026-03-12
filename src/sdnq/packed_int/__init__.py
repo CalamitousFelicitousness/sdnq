@@ -1,41 +1,38 @@
 import torch
 
-from ..common import dtype_dict # noqa: TID252
-
+from ..common import dtype_dict
 from .pack import (
-    pack_uint15,
-    pack_uint14,
-    pack_uint13,
-    pack_uint12,
-    pack_uint11,
-    pack_uint10,
-    pack_uint9,
-    pack_uint7,
-    pack_uint6,
-    pack_uint5,
-    pack_uint4,
-    pack_uint3,
-    pack_uint2,
     pack_uint1,
+    pack_uint2,
+    pack_uint3,
+    pack_uint4,
+    pack_uint5,
+    pack_uint6,
+    pack_uint7,
+    pack_uint9,
+    pack_uint10,
+    pack_uint11,
+    pack_uint12,
+    pack_uint13,
+    pack_uint14,
+    pack_uint15,
 )
-
 from .unpack import (
-    unpack_uint15,
-    unpack_uint14,
-    unpack_uint13,
-    unpack_uint12,
-    unpack_uint11,
-    unpack_uint10,
-    unpack_uint9,
-    unpack_uint7,
-    unpack_uint6,
-    unpack_uint5,
-    unpack_uint4,
-    unpack_uint3,
-    unpack_uint2,
     unpack_uint1,
+    unpack_uint2,
+    unpack_uint3,
+    unpack_uint4,
+    unpack_uint5,
+    unpack_uint6,
+    unpack_uint7,
+    unpack_uint9,
+    unpack_uint10,
+    unpack_uint11,
+    unpack_uint12,
+    unpack_uint13,
+    unpack_uint14,
+    unpack_uint15,
 )
-
 
 packed_int_function_dict = {
     "uint15": {"pack": pack_uint15, "unpack": unpack_uint15},

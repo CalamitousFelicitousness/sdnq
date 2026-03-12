@@ -1,5 +1,4 @@
 import copy
-from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch._guards import detect_fake_mode
@@ -53,7 +52,7 @@ class SDNQTensor(torch.Tensor):
 
     @classmethod
     def __tensor_unflatten__(cls, tensor_data_dict: dict[str, torch.Tensor], sdnq_dequantizer: SDNQDequantizer, outer_size=None, outer_stride=None):
-        return SDNQTensor(tensor_data_dict["weight"], tensor_data_dict["scale"], tensor_data_dict.get("zero_point", None), tensor_data_dict.get("svd_up", None), tensor_data_dict.get("svd_down", None), sdnq_dequantizer)
+        return SDNQTensor(tensor_data_dict["weight"], tensor_data_dict["scale"], tensor_data_dict.get("zero_point"), tensor_data_dict.get("svd_up"), tensor_data_dict.get("svd_down"), sdnq_dequantizer)
 
     def __repr__(self):
         return f"SDNQTensor(weight={self.weight!r}, scale={self.scale!r}, zero_point={self.zero_point!r}, svd_up={self.svd_up!r}, svd_down={self.svd_down!r}), sdnq_dequantizer={self.sdnq_dequantizer!r}"

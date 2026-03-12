@@ -4,7 +4,7 @@ import torch
 
 from ...common import compile_func, int_mm_func
 from ...dequantizer import dequantize_symmetric, dequantize_symmetric_with_bias, quantize_int_mm
-from ...packed_int import unpack_int_symetric
+from ...packed_int import unpack_int
 from .forward import check_mats
 
 

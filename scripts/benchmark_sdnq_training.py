@@ -1,6 +1,5 @@
-from collections.abc import Callable
-
 import time
+from collections.abc import Callable
 
 import torch
 from tqdm import tqdm

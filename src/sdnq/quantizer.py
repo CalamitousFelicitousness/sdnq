@@ -1,26 +1,41 @@
 # pylint: disable=redefined-builtin,no-member,protected-access
 
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import Union
 
-import re
 import torch
-
-from transformers.quantizers import HfQuantizer
+from accelerate import init_empty_weights
 from diffusers.quantizers.base import DiffusersQuantizer
 from diffusers.quantizers.quantization_config import QuantizationConfigMixin
-
 from diffusers.utils import get_module_from_name
-from accelerate import init_empty_weights
+from transformers.quantizers import HfQuantizer
 
-from .sdnext import devices, shared
-from .common import sdnq_version, dtype_dict, common_skip_keys, module_skip_keys_dict, accepted_weight_dtypes, accepted_matmul_dtypes, weights_dtype_order, allowed_types, linear_types, conv_types, conv_transpose_types, compile_func, use_tensorwise_fp8_matmul, use_contiguous_mm, check_torch_compile
+from .common import (
+    accepted_matmul_dtypes,
+    accepted_weight_dtypes,
+    allowed_types,
+    check_torch_compile,
+    common_skip_keys,
+    compile_func,
+    conv_transpose_types,
+    conv_types,
+    dtype_dict,
+    linear_types,
+    module_skip_keys_dict,
+    sdnq_version,
+    use_contiguous_mm,
+    use_tensorwise_fp8_matmul,
+    weights_dtype_order,
+)
 from .dequantizer import SDNQDequantizer, dequantize_sdnq_model
-from .packed_int import pack_int
-from .packed_float import pack_float
 from .forward import get_forward_func
 from .layers import get_sdnq_wrapper_class
+from .packed_float import pack_float
+from .packed_int import pack_int
+from .sdnext import devices, shared
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +201,7 @@ def get_minimum_dtype(weights_dtype: str, param_name: str, modules_dtype_dict: d
 def get_quant_kwargs(quant_kwargs: dict, modules_quant_config: dict[str, dict]) -> dict:
     param_key = check_param_name_in(quant_kwargs["param_name"], modules_quant_config.keys())
     if param_key is not None:
-        for key, value in modules_quant_config[param_key].items():
-            quant_kwargs[key] = value
+        quant_kwargs.update(modules_quant_config[param_key])
     quant_kwargs["weights_dtype"] = get_minimum_dtype(quant_kwargs["weights_dtype"], quant_kwargs["param_name"], quant_kwargs["modules_dtype_dict"])
     return quant_kwargs
 
@@ -753,7 +767,7 @@ class SDNQQuantize:
         missing_keys: list[str] = None, # pylint: disable=unused-argument
         **kwargs, # pylint: disable=unused-argument
     ) -> dict[str, torch.FloatTensor]:
-        _module_name, value = tuple(input_dict.items())[0]
+        _module_name, value = next(iter(input_dict.items()))
         value = value[0]
         self.hf_quantizer.create_quantized_param(model, value, full_layer_name, value.device)
         param, name = get_module_from_name(model, full_layer_name)
@@ -1173,14 +1187,16 @@ class SDNQConfig(QuantizationConfigMixin):
         return quantization_config_dict
 
 
-import diffusers.quantizers.auto # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+import diffusers.quantizers.auto  # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+
 diffusers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq"] = SDNQQuantizer
 diffusers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq"] = SDNQConfig
 
 diffusers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq_training"] = SDNQQuantizer
 diffusers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq_training"] = SDNQConfig
 
-import transformers.quantizers.auto # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+import transformers.quantizers.auto  # noqa: E402,RUF100 # pylint: disable=wrong-import-order
+
 transformers.quantizers.auto.AUTO_QUANTIZER_MAPPING["sdnq"] = SDNQQuantizer
 transformers.quantizers.auto.AUTO_QUANTIZATION_CONFIG_MAPPING["sdnq"] = SDNQConfig
 
