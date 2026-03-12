@@ -28,8 +28,6 @@ import argparse
 import base64
 import csv
 import importlib
-
-import sdnq  # noqa: F401 - registers SDNQ quantizer with diffusers/transformers
 import inspect
 import io
 import json
@@ -40,6 +38,8 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from PIL import Image
+
+import sdnq  # noqa: F401 - registers SDNQ quantizer with diffusers/transformers
 
 try:
     from rich.console import Console
@@ -102,6 +102,8 @@ def parse_args():
                     help="HuggingFace model ID or local path")
     p.add_argument("--quantized-path", default=None,
                     help="Pre-quantized pipeline path (if omitted, quantize on-the-fly)")
+    p.add_argument("--custom-pipeline", default=None,
+                    help="Custom pipeline module name (e.g. 'pipeline') for models with local pipeline.py")
 
     # On-the-fly quantization (ignored when --quantized-path set)
     p.add_argument("--weights-dtype", default="int8",
@@ -233,14 +235,13 @@ def resolve_pipeline_class(model_id, cache_dir, explicit_class=None):
 
 
 def load_fp16_pipeline(model_id, cache_dir, device, torch_dtype, pipeline_cls,
-                       cpu_offload=False):
+                       cpu_offload=False, custom_pipeline=None):
     """Load the FP16 baseline pipeline."""
     print(f"\nLoading FP16 baseline pipeline ({pipeline_cls.__name__})...")
-    pipe = pipeline_cls.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-        cache_dir=cache_dir,
-    )
+    kwargs = dict(torch_dtype=torch_dtype, cache_dir=cache_dir)
+    if custom_pipeline:
+        kwargs["custom_pipeline"] = custom_pipeline
+    pipe = pipeline_cls.from_pretrained(model_id, **kwargs)
     if cpu_offload:
         pipe.enable_model_cpu_offload()
         print("  FP16 pipeline loaded (CPU offloading enabled).")
@@ -254,13 +255,13 @@ def load_quantized_pipeline(model_id, quantized_path, cache_dir, device,
                             torch_dtype, pipeline_cls, args):
     """Load the quantized pipeline (pre-quantized or on-the-fly)."""
     cpu_offload = getattr(args, "cpu_offload", False)
+    custom_pipeline = getattr(args, "custom_pipeline", None)
     if quantized_path:
         print(f"\nLoading pre-quantized pipeline from {quantized_path}...")
-        pipe = pipeline_cls.from_pretrained(
-            quantized_path,
-            torch_dtype=torch_dtype,
-            cache_dir=cache_dir,
-        )
+        kwargs = dict(torch_dtype=torch_dtype, cache_dir=cache_dir)
+        if custom_pipeline:
+            kwargs["custom_pipeline"] = custom_pipeline
+        pipe = pipeline_cls.from_pretrained(quantized_path, **kwargs)
         if cpu_offload:
             pipe.enable_model_cpu_offload()
             print("  Pre-quantized pipeline loaded (CPU offloading enabled).")
@@ -271,11 +272,10 @@ def load_quantized_pipeline(model_id, quantized_path, cache_dir, device,
 
     # On-the-fly quantization
     print(f"\nLoading pipeline for on-the-fly quantization ({pipeline_cls.__name__})...")
-    pipe = pipeline_cls.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-        cache_dir=cache_dir,
-    )
+    kwargs = dict(torch_dtype=torch_dtype, cache_dir=cache_dir)
+    if custom_pipeline:
+        kwargs["custom_pipeline"] = custom_pipeline
+    pipe = pipeline_cls.from_pretrained(model_id, **kwargs)
     if cpu_offload:
         pipe.enable_model_cpu_offload()
     else:
@@ -1207,6 +1207,7 @@ def main():
             fp16_pipe = load_fp16_pipeline(
                 args.model_id, args.cache_dir, args.device, torch_dtype, pipeline_cls,
                 cpu_offload=args.cpu_offload,
+                custom_pipeline=args.custom_pipeline,
             )
             fp16_results = run_pipeline_inference(
                 fp16_pipe, prompts, args.seeds, args, args.output_dir, "fp16",
