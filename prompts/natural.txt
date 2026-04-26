@@ -1,0 +1,21 @@
+# Natural-language calibration prompts.
+# Used by --prompt-set natural in scripts/analyze_quantization_sensitivity.py
+# (and any other test that consumes calibration prompts).
+#
+# Natural-language prompts are appropriate for models trained on captioned
+# datasets with full sentences: Z-Image, SD3.5, Flux, Cosmos2 base, Stable
+# Cascade, and similar. The text-encoder activation distribution for these
+# models is conditioned on full English sentences with normal grammar.
+#
+# Prompts are intentionally ~50 BPE tokens or longer so that text-encoder
+# Linear layers receive activations above the 32-token int8_matmul gate
+# at scripts/analyze_quantization_sensitivity.py:compute_matmul_metrics.
+#
+# One prompt per non-comment, non-blank line. matmul calibration uses line 0;
+# future multi-sample tests can consume all entries.
+
+A wide-angle cinematic photograph of an astronaut riding a horse across the rocky surface of mars at sunset, with distant red mountains, a softly glowing futuristic spacecraft on the horizon, swirling dust, and dramatic light catching the dome of the helmet
+An ultra-detailed underwater scene of a bioluminescent jellyfish drifting among coral reefs, surrounded by schools of tropical fish, with shafts of golden sunlight piercing the deep blue water from the surface above and casting moving caustic patterns across the seafloor
+A serene mountain landscape at dawn with mist rising from a valley below, snow-capped peaks reflecting the soft pink and orange tones of the sky, pine forests on the slopes, and a single climber silhouetted against the horizon carrying a backpack with a tiny flag
+A bustling night market in a futuristic asian metropolis, narrow alleys packed with food stalls and neon signs in unfamiliar scripts, steam rising from grills, holographic advertisements floating above the crowd, rain-slick cobblestones reflecting magenta and cyan light
+A close-up portrait of an elderly blacksmith working at a forge in a stone workshop, hammering glowing orange metal on an anvil, sparks scattering through the air, his weathered face illuminated by the heat, leather apron darkened by years of soot, deep concentration in his eyes

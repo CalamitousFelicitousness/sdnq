@@ -1,0 +1,18 @@
+# Booru-tag-style calibration prompts.
+# Used by --prompt-set booru in scripts/analyze_quantization_sensitivity.py
+# (and any other test that consumes calibration prompts).
+#
+# Tag-style prompts are appropriate for booru-trained models such as Anima,
+# Pony, Illustrious, NoobAI, and similar. The text-encoder activation
+# distribution for these models is conditioned on comma-separated tags with
+# parenthesised emphasis, escaped character names, and weight modifiers like
+# (...:1.5). Calibrating with natural-language prompts produces a category
+# mismatch that can flag the wrong layers as outlier-sensitive.
+#
+# One prompt per non-comment, non-blank line. matmul calibration uses line 0;
+# future multi-sample tests can consume all entries.
+
+masterpiece, best quality, ultra-detailed, cinematic lighting, dramatic atmosphere, (extremely large full moon:1.5), giant moon in the background covering the entire sky, 1girl, fern \(sousou no frieren\), sousou no frieren, backlighting, full body is in the moon, long hair fluttering, holding a fern's staff, setting staff on front of the body, floating in the air, dark cape, night sky, stark contrast, sharp edge, facing viewer, looking at viewer
+masterpiece, best quality, ultra-detailed, 1girl, hatsune miku, vocaloid, twin tails, blue hair, long hair, blue eyes, school uniform, sailor collar, indoor, classroom, window, sunset light, looking at viewer, soft smile, hand on chin, sitting on desk, depth of field, bokeh, warm color palette
+masterpiece, best quality, highly detailed, 1boy, solo, wide shot, urban background, neon-lit city street at night, rain-slicked pavement reflecting signs, casual streetwear, dark hooded jacket, hands in pockets, looking away from viewer, serious expression, atmospheric haze, cinematic lighting, motion blur from passing traffic
+masterpiece, best quality, ultra-detailed, 2girls, dynamic pose, action scene, sword fight, sparks flying, medieval castle interior, stained glass windows, chandelier, dramatic lighting, long flowing hair, period-accurate armor, intense expressions, looking at each other, contrasting outfits, depth of field
