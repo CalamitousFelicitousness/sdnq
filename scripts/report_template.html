@@ -458,6 +458,12 @@ tbody tr:hover {
                 {% for d in dtypes %}
                 <th class="num">{{ d }}</th>
                 {% endfor %}
+                {% if has_matmul %}
+                <th class="num" title="Output NMSE when running INT8 matmul on real captured activations">INT8 MM NMSE</th>
+                {% endif %}
+                {% if has_dynamic_check %}
+                <th title="Dtype chosen by SDNQ dynamic quantization for this layer's weight">Dyn Choice</th>
+                {% endif %}
                 <th>Status</th>
             </tr>
         </thead>
@@ -476,6 +482,20 @@ tbody tr:hover {
                     </span>
                 </td>
                 {% endfor %}
+                {% if has_matmul %}
+                <td class="num">
+                    <span class="nmse-cell" style="background-color:{{ row.mm_nmse.bg_color }};color:{{ row.mm_nmse.text_color }}">
+                        {{ row.mm_nmse.display }}
+                    </span>
+                </td>
+                {% endif %}
+                {% if has_dynamic_check %}
+                <td>
+                    <span class="nmse-cell" style="background-color:{{ row.dyn_choice.bg_color }};color:{{ row.dyn_choice.text_color }}">
+                        {{ row.dyn_choice.display }}
+                    </span>
+                </td>
+                {% endif %}
                 <td>
                     {% if row.status == "SKIP" %}
                     <span class="status-badge status-skip">SKIP</span>
