@@ -81,6 +81,19 @@ When a single group size is passed (the default), behavior is unchanged — dtyp
 |----------|---------|-------------|
 | `--auto-config` | off | Run grid search across all tested dtypes, group sizes, and SVD modes to find the cheapest quantization configuration per layer that keeps NMSE under the promote threshold |
 
+### INT8 Pre-Quant Sensitivity Checks
+
+These two opt-in checks supplement the weight reconstruction NMSE with axis-specific INT8 sensitivity measurements. See the dedicated [INT8 Pre-Quant Sensitivity Checks](#int8-pre-quant-sensitivity-checks) section below for the full behavior; this table is the CLI reference.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--check-weights` | `none` | When set to `dynamic`, runs `sdnq_quantize_layer_weight_dynamic` per layer and records the dtype it picked. Layers where INT8 weight quantization fails the threshold and the function falls through to a finer dtype are flagged. Reproduces the signal SDNQ's dynamic quantization uses (Disty-style hand-curated skip lists) |
+| `--weight-threshold` | `1e-2` | Std-normalized weight MSE threshold for `--check-weights`. Mirrors SDNQ's `dynamic_loss_threshold` default. For tightly-quantizable models like Anima where the default flags nothing, drop to `1e-4` to surface relative outliers |
+| `--check-matmul` | `none` | When set to `int8`, runs an extra per-layer pass that compares the FP32 reference output to the actual SDNQ INT8 GEMM output, using activations captured from a short calibration pipeline run. Required: also pass `--prompt-set`. Detects layers where `int8_matmul` corrupts output due to activation outliers, a failure mode invisible to weight-only analysis |
+| `--prompt-set` | required with `--check-matmul` | `booru` or `natural`. Selects the calibration prompt file at `prompts/<set>.txt`. No default because the wrong distribution produces misleading flags |
+| `--matmul-steps` | `2` | Inference steps for the calibration pipeline run |
+| `--matmul-max-tokens` | `256` | Cap on captured activation token dimension to bound memory |
+
 ### Classification Thresholds
 
 | Argument | Default | Description |
@@ -101,7 +114,7 @@ Layers are classified using multi-dtype logic:
 | `--top-n` | `30` | Number of worst layers to display in the summary table and report |
 | `--report-format` | `html-png` | Report format: `html` (no chart), `html-png` (with embedded chart), or `pdf` |
 | `--report-output` | auto | Report file path. Defaults to `<output-stem>_report.html` or `.pdf` |
-| `--pipeline-config-output` | auto | JSON output path for per-component pipeline config. Defaults to `<output-stem>_pipeline_config.json`. Only used with `--auto-config` |
+| `--pipeline-config-output` | auto | JSON output path for per-component pipeline config. Defaults to `<output-stem>_pipeline_config.json`. Written when any of `--auto-config`, `--check-weights`, or `--check-matmul` produce findings. When multiple sources contribute, skip-config (dyn + matmul findings) takes precedence over auto-config grid-search recommendations on conflict |
 
 The report is generated automatically after the CSV and terminal summary. The output path is derived from the `--output` CSV path unless `--report-output` is specified.
 
@@ -276,6 +289,162 @@ The auto-config mode produces:
 
 `SDNQConfig` supports per-layer dtype overrides (`modules_dtype_dict`), per-layer SVD overrides (`modules_svd_dict`), and per-layer group size overrides (`modules_group_size_dict`). The snippet uses the most common values as the base configuration and emits override dicts for layers that need different dtype, group size, or SVD settings.
 
+## INT8 Pre-Quant Sensitivity Checks
+
+Auto-config measures **weight reconstruction error**: how far `dequantize(quantize(weight))` drifts from the original. That signal is necessary but not sufficient: a layer can have low weight reconstruction error and still produce visibly corrupted output at inference time, either because (a) the chosen INT8 weight dtype is the wrong fit for that layer's distribution, or (b) the INT8 GEMM kernel itself accumulates error past acceptable bounds on the actual activations the layer sees. These two failure modes are orthogonal (a single layer can fail on one axis, the other, or both) and require different SDNQConfig knobs to fix.
+
+The two checks below each target one axis. They run independently and can be combined.
+
+### `--check-weights dynamic`: Weight-Side Sensitivity
+
+Reuses `sdnq_quantize_layer_weight_dynamic` from `src/sdnq/quantizer.py:432-479` per layer to detect layers where INT8 weight quantization fails. The dynamic function walks `weights_dtype_order` from coarsest to finest, picks the first dtype whose **std-normalized weight MSE** falls under `dynamic_loss_threshold`, and returns the chosen dtype. Layers where INT8 was insufficient and the walk fell through to a finer dtype get flagged with the chosen alternative recorded.
+
+This reproduces the signal SDNQ's existing dynamic quantization uses internally to assemble per-architecture skip lists. Hand-curated lists like the one Disty maintains for Anima are the result of running this same procedure and pruning to a manageable subset.
+
+The check is component-scoped to transformer and text-encoder subfolders (where Linear layers dominate). It does not require a pipeline calibration run because it operates purely on the weight tensors.
+
+#### Usage
+
+```bash
+python scripts/analyze_quantization_sensitivity.py \
+    --model-id CalamitousFelicitousness/Anima-Preview-3-sdnext-diffusers \
+    --components transformer:CosmosTransformer3DModel text_encoder:Qwen3Model \
+    --dtypes int8 \
+    --no-svd \
+    --check-weights dynamic \
+    --weight-threshold 1e-4 \
+    --device cuda
+```
+
+#### Output
+
+Adds these CSV columns (populated for INT8 rows in target components, blank otherwise):
+
+| Column | Type | Description |
+|----|----|----|
+| `dyn_chosen_dtype` | str | The dtype dynamic quant picked (e.g. `int8`, `uint8`, `int9`, `float8_e4m3fn`). Empty when no dtype passed |
+| `dyn_int8_safe` | bool | True when chosen dtype was INT8 (layer is safe). False when fell through |
+| `dyn_int8_loss` | float | Std-normalized weight MSE of INT8 specifically, as a diagnostic value |
+| `dyn_status` | str | `ok` (chose a dtype) or `no_dtype_passed` (full-skip required) |
+
+The HTML report adds a **Dyn Choice** column showing the chosen dtype: green for INT8 (safe), amber for any finer dtype, red for `no_dtype_passed`.
+
+#### Threshold tuning
+
+The default `--weight-threshold 1e-2` matches SDNQ's `dynamic_loss_threshold` default. For models with broadly well-behaved weights (Anima, Z-Image), every layer's INT8 loss falls under this threshold and nothing gets flagged. To surface **relative** outliers (the layers most likely to benefit from a finer dtype), drop the threshold:
+
+| Threshold | Anima Preview-3 weight-flagged | Notes |
+|----|----|----|
+| `1e-2` (default) | 0 / 650 layers | Generous; appropriate when you want only catastrophic weight-dtype mismatches |
+| `1e-4` | 63 / 650 layers | Captures 100% of Disty's hand-curated 33-layer Anima skip list |
+| `1e-8` | 650 / 650 layers | Useless; flags everything |
+
+Inspect the `dyn_int8_loss` distribution in the CSV to pick a threshold appropriate for your model.
+
+### `--check-matmul int8`: Matmul-Side Sensitivity
+
+Measures per-layer INT8 GEMM output divergence against the FP32 reference using **real captured activations**. Loads the full pipeline, hooks `register_forward_pre_hook` on every Linear in the target subfolders, runs a short calibration generation with the prompt from `--prompt-set`, then per-layer compares `F.linear(x, W_fp32)` against `int8_matmul(x, W_int8, scale, ...)` from `src/sdnq/layers/linear/linear_int8.py`. The GEMM kernel is the production one; we measure exactly what the layer would output at inference time.
+
+The check is required because of dynamic per-token activation quantization: `int8_matmul` symmetric-quantizes each input row to INT8 internally (`quantize_int_mm_input` at `src/sdnq/layers/linear/linear_int8.py:11`). When activations have outliers (common in cross-attention K/V/O projections that receive text-encoder hidden states), those outliers dominate the per-row scale and crush the rest of the row into noise. The result is large visible artifacts in generated images, and weight-only analysis is structurally blind to it.
+
+#### Calibration prompts
+
+Calibration prompts live in `prompts/booru.txt` and `prompts/natural.txt` at the repo root. Each file is a list of newline-separated prompts; `#` comments and blank lines are skipped. The matmul check uses line 0 of the chosen file. Future multi-sample tests can consume all entries from the same file.
+
+`--prompt-set` is **required** when `--check-matmul` is set, since the wrong distribution produces misleading flags:
+
+- **`booru`** for tag-trained models (Anima, Pony, Illustrious, NoobAI, ...). The text encoder activation distribution is conditioned on comma-separated tags with parenthesised emphasis and weight modifiers.
+- **`natural`** for caption-trained models (Z-Image, SD3.5, Flux, Cosmos2 base, Stable Cascade, ...). The text encoder activation distribution is conditioned on full English sentences.
+
+Both prompt files are tuned to be ≥50 BPE tokens so text-encoder Linear layers clear the 32-token gate that `int8_matmul` short-circuits below (see eligibility section).
+
+#### Usage
+
+```bash
+python scripts/analyze_quantization_sensitivity.py \
+    --model-id CalamitousFelicitousness/Anima-Preview-3-sdnext-diffusers \
+    --components transformer:CosmosTransformer3DModel text_encoder:Qwen3Model \
+    --dtypes int8 \
+    --no-svd \
+    --check-matmul int8 \
+    --prompt-set booru \
+    --device cuda
+```
+
+#### Output
+
+Adds these CSV columns (populated for INT8 rows in target components, blank otherwise):
+
+| Column | Type | Description |
+|----|----|----|
+| `mm_nmse` | float | NMSE between FP32 reference output and INT8 matmul output |
+| `mm_sqnr_db` | float | Signal-to-quantization-noise ratio in dB |
+| `mm_cosine_sim` | float | Cosine similarity between reference and INT8 outputs |
+| `mm_max_abs_err` | float | Max element-wise absolute error |
+| `mm_relative_l2` | float | Relative L2 error |
+| `mm_eligible` | bool | False if the layer was excluded (see eligibility) |
+| `mm_status` | str | `ok` or one of the eligibility codes below |
+
+The HTML report adds an **INT8 MM NMSE** column color-coded the same way as the weight-NMSE columns.
+
+#### Eligibility gates
+
+Not every Linear layer can run through INT8 matmul at inference. The analyzer mirrors the production gates exactly to avoid measuring under a fallback path that would never run in practice. Excluded layers report a status code rather than a measurement:
+
+| `mm_status` | Meaning |
+|----|----|
+| `ok` | Measurement ran |
+| `dim_gate` | Weight dimensions don't both pass `≥ 32` and `divisible by 16` (gate at `src/sdnq/quantizer.py:305-307`). The layer never enters `int8_matmul` even at inference |
+| `too_few_tokens` | Captured input has `numel/last_dim < 32`, below the threshold at `src/sdnq/layers/linear/linear_int8.py:50`. Matches the production short-circuit that bypasses `int8_matmul` and falls back to `dequantize → F.linear` for tiny inputs. Conditioning Linears (time embeddings, adaLN modulation, per-head norm projections) commonly hit this |
+| `unsupported_class:<name>` | Defensive; should not fire for diffusers/transformers models |
+| `no_activation` | Layer wasn't called during calibration (conditional/MoE branch). Worth investigating if it appears |
+| `ref_failed` / `quantize_failed` / `mm_failed` | An exception in the FP32 reference, in `sdnq_quantize_layer_weight`, or in `int8_matmul` itself. Rare; indicates a bug or incompatible weight |
+
+The terminal output prints the `Matmul ineligibility breakdown` counter at the end of the suggestion section so you can sanity-check totals.
+
+### Combined Output: Structured Pre-Quant Config
+
+When both checks are enabled (or even one), the suggestion printer emits **three orthogonal SDNQConfig knobs** rather than a single `modules_to_not_convert` list. Each maps to a distinct failure mode:
+
+| Knob | Failure mode | Cost trade-off |
+|----|----|----|
+| `modules_to_not_convert` | Dynamic quant returned `no_dtype_passed` (no dtype in the walk passed). Layer must stay in fp16 | Highest memory cost (full fp16). Only used when dynamic quant indicates nothing else works |
+| `modules_dtype_dict[<chosen>]` | Dynamic quant rejected INT8 but found a working finer dtype. Layer keeps quantization at the right precision | Memory savings preserved at the layer's actual safe precision (e.g. UINT8 same size as INT8) |
+| `modules_quant_config[<layer>]: {"use_quantized_matmul": False}` | Matmul-side flagged. Layer keeps INT8 weight; only the per-layer GEMM dispatch is disabled | INT8 weight memory savings preserved; per-layer fp16 dequant + `F.linear` fallback at inference |
+
+A single layer can land in `modules_dtype_dict` and `modules_quant_config` simultaneously, since they're orthogonal axes (weight precision vs. kernel choice). The terminal output prints each section separately with paste-ready Python:
+
+```text
+# transformer:CosmosTransformer3DModel
+#   weight-side flagged: 56  matmul-side flagged: 84
+#   weight threshold: 0.0001    (int8_loss > threshold => layer rejected)
+#   matmul threshold: 0.1    (mm_nmse > threshold => INT8 GEMM corrupts output)
+
+# Layers requiring a finer weight dtype than int8 (56 layers across 4 dtype(s)).
+modules_dtype_dict = {
+    "float9_e3m5fn": [
+        "time_embed.t_embedder.linear_2.weight",
+    ],
+    "int10": [...],
+    "int9": [...],
+    "uint8": [...],
+}
+
+# Layers where INT8 GEMM corrupts output (84 layers): keep INT8 weight, disable per-layer matmul.
+modules_quant_config = {
+    "transformer_blocks.0.attn2.to_k.weight": {"use_quantized_matmul": False},
+    ...
+}
+```
+
+The same data is also written as JSON to `<output-stem>_pipeline_config.json` (see [Pipeline Config JSON Format](#pipeline-config-json-format) for the schema). The JSON is directly consumable as `SDNQConfig(**entry)` for each subfolder; no glue code needed.
+
+### Why TE skips matter despite running once
+
+The text encoder runs once per generation, but its output is the conditioning signal feeding **every cross-attention layer in the transformer at every step**. With 30 inference steps × 28 transformer blocks, text-encoder errors are read 840× per generation. Errors that originate in the text encoder propagate through the entire denoising trajectory and don't get washed out by subsequent norm layers the way transformer-internal errors do. This makes TE weight-side fixes high-leverage even when the absolute error magnitudes are smaller than transformer flags.
+
+The cost side is also asymmetric: skipping a TE layer from INT8 has near-zero latency cost (TE runs once and the absolute time is small). Skipping a transformer layer from INT8 has per-step cost on every Linear-forward. So TE flags should be acted on; transformer flags need to weigh quality against per-generation latency.
+
 ## Architecture
 
 Report generation uses a shared data pipeline:
@@ -299,34 +468,57 @@ prepare_summary_data(results, args) → summary dict
 
 ## Per-Component Auto-Config and Pipeline Quantization
 
-When `--auto-config` is used with a multi-component pipeline, the analysis produces:
+When `--auto-config`, `--check-weights`, or `--check-matmul` runs on a multi-component pipeline, the analysis produces:
 
-1. **Per-component config snippets** — Each component gets its own SDNQConfig recommendation with component-specific base dtype, skip layers, dtype overrides, and SVD overrides.
-2. **Pipeline config JSON** — A machine-readable JSON file mapping subfolder names to SDNQConfig kwargs. Written to `<output-stem>_pipeline_config.json` by default (override with `--pipeline-config-output`).
-3. **Component column** — The terminal table and HTML report include a "Comp" column when multiple components are analyzed.
-4. **Per-component size breakdown** — The stats card shows size estimates per component.
+1. **Per-component config snippets**: each component gets its own SDNQConfig recommendation with component-specific base dtype, skip layers, dtype overrides, and SVD overrides.
+2. **Pipeline config JSON**: a machine-readable JSON file mapping subfolder names to SDNQConfig kwargs. Written to `<output-stem>_pipeline_config.json` by default (override with `--pipeline-config-output`). Triggered by any of `--auto-config`, `--check-weights`, or `--check-matmul` producing findings.
+3. **Component column**: the terminal table and HTML report include a "Comp" column when multiple components are analyzed.
+4. **Per-component size breakdown**: the stats card shows size estimates per component (auto-config only).
 
 ### Pipeline Config JSON Format
+
+The JSON is a dict mapping subfolder name to `SDNQConfig` kwargs. Each subfolder entry can include any combination of fields depending on which sources contributed (auto-config grid search, `--check-weights`, `--check-matmul`):
 
 ```json
 {
   "transformer": {
-    "weights_dtype": "uint4",
+    "weights_dtype": "int8",
+    "use_quantized_matmul": true,
     "group_size": 32,
-    "modules_to_not_convert": ["proj_out.weight"],
-    "modules_dtype_dict": {"uint8": ["sensitive_layer.weight"]},
-    "modules_svd_dict": {32: ["layer_with_svd.weight"]}
+    "modules_to_not_convert": ["layer_with_no_passing_dtype.weight"],
+    "modules_dtype_dict": {
+      "uint8": ["sensitive_layer.weight"],
+      "int9": ["finer_precision_layer.weight"],
+      "float9_e3m5fn": ["time_embedder_linear.weight"]
+    },
+    "modules_svd_dict": {"32": ["layer_with_svd.weight"]},
+    "modules_quant_config": {
+      "transformer_blocks.0.attn2.to_k.weight": {"use_quantized_matmul": false}
+    }
   },
   "text_encoder": {
     "weights_dtype": "int8",
-    "group_size": 0,
-    "use_svd": true,
-    "svd_rank": 32
+    "use_quantized_matmul": true,
+    "modules_dtype_dict": {
+      "uint8": ["layers.16.mlp.down_proj.weight"]
+    }
   }
 }
 ```
 
-Each entry contains the kwargs to pass to `SDNQConfig(...)` for that component.
+Field provenance:
+
+| Field | Source |
+|----|----|
+| `weights_dtype`, `group_size`, `use_svd`, `svd_rank` | Auto-config grid search (or defaults when only `--check-weights`/`--check-matmul` are active) |
+| `modules_to_not_convert` | Auto-config (grid-search SKIP) + `--check-weights` (`no_dtype_passed`). Union, deduped |
+| `modules_dtype_dict` | Auto-config (per-dtype overrides from grid search) + `--check-weights` (per-layer chosen dtype). Union per dtype key |
+| `modules_group_size_dict`, `modules_svd_dict` | Auto-config only |
+| `modules_quant_config` | `--check-matmul` only |
+
+When sources conflict on a field, skip-config (`--check-weights`/`--check-matmul`) takes precedence over auto-config because per-layer dynamic quantization and per-layer matmul measurement are more rigorous than the threshold-based grid-search heuristic.
+
+Each entry is directly consumable as `SDNQConfig(**entry)` with no transformations needed.
 
 ### Pipeline Quantize Script
 
