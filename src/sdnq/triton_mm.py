@@ -15,11 +15,11 @@ import triton.language as tl
 
 matmul_configs = [
     triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": GM}, num_warps=w, num_stages=s)
-    for BM in [32, 64, 128, 256]
-    for BN in [32, 64, 128, 256]
-    for BK in [32, 64, 128]
-    for GM in [4, 8]
-    for w in [4, 8]
+    for BM in [64, 128, 256]
+    for BN in [64, 128, 256]
+    for BK in [64, 128]
+    for GM in [2, 4, 8]
+    for w in [2, 4, 8]
     for s in [2]
 ]
 
