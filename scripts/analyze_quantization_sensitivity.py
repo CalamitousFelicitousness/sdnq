@@ -84,6 +84,15 @@ def parse_args():
                     help="NMSE above which layer should be skipped entirely")
     p.add_argument("--promote-threshold", type=float, default=0.01,
                     help="NMSE above which layer needs higher precision")
+    p.add_argument("--mm-catastrophic-threshold", type=float, default=1.0,
+                    help="NMSE above which a matmul dtype is treated as catastrophic (vs "
+                         "soft-fail). Non-finite NMSE is always catastrophic. When the cheapest "
+                         "tested dtype is catastrophic but a softer dtype is only soft-fail "
+                         "(above skip-threshold but finite and below this), the suggestion "
+                         "logic routes to the softer dtype rather than emitting "
+                         "use_quantized_matmul: False. The default 1.0 corresponds to "
+                         "error variance equalling signal variance (output noise as large as "
+                         "the signal). Only affects the matmul-side suggestion classification.")
     p.add_argument("--top-n", type=int, default=0,
                     help="Number of worst layers to show in summary (0=all)")
     p.add_argument("--device", default="cpu",
@@ -99,11 +108,14 @@ def parse_args():
                          "(default: <output-stem>_pipeline_config.json). Only with --auto-config.")
     p.add_argument("--from-csv", default=None,
                     help="Regenerate report from existing CSV instead of re-running analysis")
-    p.add_argument("--check-matmul", choices=["none", "int8"], default="none",
-                    help="Run an extra per-layer pass that compares fp32-reference output to the "
-                         "actual quantized matmul output, using activations captured from a short "
-                         "calibration pipeline run. 'int8' currently supported; covers transformer "
-                         "and text-encoder components only (VAE is conv-only). Adds mm_* columns.")
+    p.add_argument("--check-matmul", nargs="*", choices=["int8", "fp8", "fp16"], default=[],
+                    metavar="DTYPE",
+                    help="Run extra per-layer passes that compare fp32-reference output to the "
+                         "actual quantized matmul output for each requested dtype, using "
+                         "activations captured from one short calibration pipeline run. Accepts "
+                         "any subset of {int8, fp8, fp16} as space-separated values. Covers "
+                         "transformer and text-encoder components only (VAE is conv-only). "
+                         "Adds mm_<dtype>_* columns per requested dtype.")
     p.add_argument("--prompt-set", choices=["booru", "natural"], default=None,
                     help="Calibration prompt set to use when --check-matmul is set. Reads from "
                          "<repo>/prompts/<set>.txt. 'booru' for tag-trained models (Anima, Pony, "
@@ -112,9 +124,18 @@ def parse_args():
                          "--check-matmul is set; no default because the wrong distribution "
                          "produces misleading flags.")
     p.add_argument("--matmul-steps", type=int, default=2,
-                    help="Inference steps for the calibration pipeline run when --check-matmul is set")
+                    help="Inference steps for the calibration pipeline run when --check-matmul "
+                         "is set. One pass captures activations once and feeds every requested dtype.")
     p.add_argument("--matmul-max-tokens", type=int, default=256,
                     help="Cap on number of tokens kept per captured activation (memory bound)")
+    p.add_argument("--no-fp8-simulate", action="store_true",
+                    help="On non-Hopper GPUs, mark fp8 rows as `no_fp8_hardware` ineligible "
+                         "instead of falling through to a pure-pytorch fp32 simulation. By default "
+                         "the analyzer simulates the fp8 path so RTX 30/40, RDNA, etc. still get "
+                         "fp8 NMSE numbers; status='simulated' identifies these rows. The "
+                         "simulation reproduces the e4m3fn cast (the dominant error source) but "
+                         "swaps torch._scaled_mm for an fp32 matmul, so it should not be used "
+                         "for production dispatch decisions.")
     p.add_argument("--check-weights", choices=["none", "dynamic"], default="none",
                     help="Run an extra per-layer pass that mirrors SDNQ dynamic quantization to "
                          "decide whether INT8 weight quantization is sufficient. 'dynamic' calls "
@@ -296,6 +317,7 @@ def run_calibration_and_capture(model_id, target_subfolders, prompt, args):
     pipe = pipe.to(args.device)
 
     captured = {}
+    captured_max = {}
     handles = []
     max_tokens = max(32, int(args.matmul_max_tokens))
 
@@ -311,7 +333,19 @@ def run_calibration_and_capture(model_id, target_subfolders, prompt, args):
                 idx = [slice(None)] * x.dim()
                 idx[-2] = slice(0, max_tokens)
                 x = x[tuple(idx)]
-            captured[key] = x.detach().to("cpu", copy=True)
+            # Pipelines that use CFG call each cross-attention K/V/out twice per step:
+            # once with real text embeddings (conditional) and once with a zero null
+            # context (unconditional). Capturing only the *last* call would land on
+            # whichever happened last and could be the all-zero null pass, producing
+            # zero-variance references and false-catastrophic NMSE downstream. Keep
+            # the activation with the highest abs magnitude across all calls so we
+            # both skip zero passes and preferentially measure outlier-bearing
+            # activations, which are the actual worst case for INT8 MM.
+            new_max = x.abs().max().item()
+            prev_max = captured_max.get(key, -1.0)
+            if new_max > prev_max:
+                captured[key] = x.detach().to("cpu", copy=True)
+                captured_max[key] = new_max
         return _hook
 
     layer_count_by_component = {}
@@ -458,47 +492,158 @@ def compute_metrics(original: torch.Tensor, reconstructed: torch.Tensor):
     }
 
 
-EMPTY_MM_METRICS = {
-    "mm_nmse": "",
-    "mm_sqnr_db": "",
-    "mm_cosine_sim": "",
-    "mm_max_abs_err": "",
-    "mm_relative_l2": "",
-    "mm_eligible": "",
-    "mm_status": "",
+MM_DTYPES = ("int8", "fp8", "fp16")
+
+# Maps short flag names to (weights_dtype, quantized_matmul_dtype) used to set up
+# sdnq_quantize_layer_weight. weights_dtype matches the kernel under test so
+# we measure the production path: native int8 weights + int8 MM, native fp8
+# weights + fp8 MM, native fp16-with-scale weights + fp16 MM.
+_MM_DTYPE_KWARGS = {
+    "int8": {"weights_dtype": "int8", "quantized_matmul_dtype": "int8"},
+    "fp8": {"weights_dtype": "float8_e4m3fn", "quantized_matmul_dtype": "float8_e4m3fn"},
+    "fp16": {"weights_dtype": "float16", "quantized_matmul_dtype": "float16"},
 }
 
 
-def _ineligible_mm_metrics(reason: str) -> dict:
+def _empty_mm_metrics(mm_dtype: str) -> dict:
     return {
-        "mm_nmse": float("nan"),
-        "mm_sqnr_db": float("nan"),
-        "mm_cosine_sim": float("nan"),
-        "mm_max_abs_err": float("nan"),
-        "mm_relative_l2": float("nan"),
-        "mm_eligible": False,
-        "mm_status": reason,
+        f"mm_{mm_dtype}_nmse": "",
+        f"mm_{mm_dtype}_sqnr_db": "",
+        f"mm_{mm_dtype}_cosine_sim": "",
+        f"mm_{mm_dtype}_max_abs_err": "",
+        f"mm_{mm_dtype}_relative_l2": "",
+        f"mm_{mm_dtype}_eligible": "",
+        f"mm_{mm_dtype}_status": "",
     }
 
 
-def compute_matmul_metrics(module, captured_activation, args):
-    """Run an FP32 reference and the SDNQ INT8 matmul on the given activation,
-    and return per-layer error metrics. Returns a dict with mm_* keys."""
-    from sdnq.layers.linear.linear_int8 import int8_matmul
+EMPTY_MM_METRICS_ALL = {k: v for dt in MM_DTYPES for k, v in _empty_mm_metrics(dt).items()}
+
+
+def _ineligible_mm_metrics(mm_dtype: str, reason: str) -> dict:
+    return {
+        f"mm_{mm_dtype}_nmse": float("nan"),
+        f"mm_{mm_dtype}_sqnr_db": float("nan"),
+        f"mm_{mm_dtype}_cosine_sim": float("nan"),
+        f"mm_{mm_dtype}_max_abs_err": float("nan"),
+        f"mm_{mm_dtype}_relative_l2": float("nan"),
+        f"mm_{mm_dtype}_eligible": False,
+        f"mm_{mm_dtype}_status": reason,
+    }
+
+
+def _select_mm_kernel(mm_dtype: str):
+    """Return the production kernel callable for the requested matmul dtype.
+
+    Mirrors sdnq.forward.get_forward_func dispatch. The fp8 path bifurcates by
+    hardware: rowwise on Hopper+, tensorwise emulation pre-Hopper.
+    """
+    if mm_dtype == "int8":
+        from sdnq.layers.linear.linear_int8 import int8_matmul
+        return int8_matmul
+    if mm_dtype == "fp16":
+        from sdnq.layers.linear.linear_fp16 import fp16_matmul
+        return fp16_matmul
+    if mm_dtype == "fp8":
+        from sdnq.common import use_tensorwise_fp8_matmul
+        if use_tensorwise_fp8_matmul:
+            from sdnq.layers.linear.linear_fp8_tensorwise import fp8_matmul_tensorwise
+            return fp8_matmul_tensorwise
+        from sdnq.layers.linear.linear_fp8 import fp8_matmul
+        return fp8_matmul
+    raise ValueError(f"unknown mm_dtype: {mm_dtype}")
+
+
+def fp8_matmul_simulated(
+    input,
+    weight,
+    scale,
+    bias=None,
+    svd_up=None,
+    svd_down=None,
+    quantized_weight_shape=None,
+    weights_dtype=None,
+):
+    """Analyzer-only simulation of fp8_matmul for non-Hopper hardware.
+
+    Mirrors src/sdnq/layers/linear/linear_fp8.py:fp8_matmul line-by-line,
+    swapping torch._scaled_mm (Hopper+ only) for an fp32 matmul that
+    reproduces the same per-row + per-column scaled product. The dominant
+    error source on the FP8 path is the e4m3fn cast inside quantize_fp_mm_input
+    and the weight quantization, both of which run unchanged here. The
+    accumulator dtype change (fp32 instead of whatever _scaled_mm uses on
+    Hopper) is second-order. Status reflects "simulated" so the source of the
+    number is visible in the CSV / report.
+    """
+    import torch as _torch
+
+    from sdnq.layers.linear.forward import check_mats
+    from sdnq.layers.linear.linear_fp8 import quantize_fp_mm_input
+    from sdnq.packed_float import unpack_float
+
+    if quantized_weight_shape is not None:
+        weight = unpack_float(weight, weights_dtype, quantized_weight_shape).to(dtype=_torch.float8_e4m3fn).t_()
+        scale = scale.t()
+    return_dtype = input.dtype
+    output_shape = (*input.shape[:-1], weight.shape[-1])
+
+    svd_bias = None
+    if svd_up is not None:
+        input_flat = input.flatten(0, -2)
+        svd_bias = _torch.mm(_torch.mm(input_flat.to(dtype=svd_down.dtype), svd_down), svd_up)
+
+    input, input_scale = quantize_fp_mm_input(input)
+    input, weight = check_mats(input, weight, allow_contiguous_mm=False)
+
+    # _scaled_mm equivalent: (input @ weight) * scale_a (M,1) * scale_b (1,N) + bias
+    a = input.to(dtype=_torch.float32)
+    b = weight.to(dtype=_torch.float32)
+    result = _torch.mm(a, b)
+    result = result * input_scale.to(dtype=_torch.float32).reshape(-1, 1)
+    result = result * scale.to(dtype=_torch.float32).reshape(1, -1)
+    if bias is not None:
+        result = result + bias.to(dtype=_torch.float32).reshape(1, -1)
+    if svd_bias is not None:
+        result = result + svd_bias.to(dtype=_torch.float32)
+
+    return result.reshape(output_shape).to(return_dtype)
+
+
+def compute_mm_metrics(module, captured_activation, args, mm_dtype: str):
+    """Run an FP32 reference and the SDNQ matmul kernel for ``mm_dtype`` on the
+    captured activation, returning per-layer error metrics keyed with
+    ``mm_<mm_dtype>_*``. ``mm_dtype`` is one of MM_DTYPES.
+    """
     from sdnq.quantizer import sdnq_quantize_layer_weight
 
     if captured_activation is None:
-        return _ineligible_mm_metrics("no_activation")
+        return _ineligible_mm_metrics(mm_dtype, "no_activation")
 
     layer_class = type(module).__name__
     if layer_class not in ("Linear", "SDNQLinear"):
-        return _ineligible_mm_metrics(f"unsupported_class:{layer_class}")
+        return _ineligible_mm_metrics(mm_dtype, f"unsupported_class:{layer_class}")
 
     x = captured_activation.to(args.device)
-    # int8_matmul short-circuits to dequant+F.linear for tiny inputs (linear_int8.py:50);
-    # measuring under that path defeats the purpose, so flag and skip.
-    if x.numel() / x.shape[-1] < 32:
-        return _ineligible_mm_metrics("too_few_tokens")
+    # int8 / fp8 kernels short-circuit to dequant+F.linear for tiny inputs
+    # (linear_int8.py:50, linear_fp8.py:46, linear_fp8_tensorwise.py:51); measuring
+    # under that path defeats the purpose. fp16_matmul has no short-circuit so
+    # the gate does not apply to it.
+    if mm_dtype in ("int8", "fp8") and x.numel() / x.shape[-1] < 32:
+        return _ineligible_mm_metrics(mm_dtype, "too_few_tokens")
+    # Degenerate inputs (all zeros, all-equal) produce zero-variance reference output,
+    # which makes NMSE = mse/variance = inf regardless of kernel. This shows up on
+    # CFG unconditional passes that route a zero null-context tensor to cross-attention
+    # K/V/out projections. Skip rather than report a false catastrophic failure.
+    if x.abs().max().item() == 0.0:
+        return _ineligible_mm_metrics(mm_dtype, "degenerate_input")
+
+    use_fp8_simulation = False
+    if mm_dtype == "fp8":
+        from sdnq.common import is_fp8_mm_supported
+        if not is_fp8_mm_supported:
+            if getattr(args, "no_fp8_simulate", False):
+                return _ineligible_mm_metrics(mm_dtype, "no_fp8_hardware")
+            use_fp8_simulation = True
 
     weight = module.weight.data
     bias = module.bias.data.to(args.device, dtype=torch.float32) if module.bias is not None else None
@@ -508,13 +653,12 @@ def compute_matmul_metrics(module, captured_activation, args):
     try:
         y_ref = F.linear(x_fp, weight_fp, bias)
     except Exception as e:
-        return _ineligible_mm_metrics(f"ref_failed:{type(e).__name__}")
+        return _ineligible_mm_metrics(mm_dtype, f"ref_failed:{type(e).__name__}")
 
     try:
         qw, scale, _zp, svd_up, svd_down, dequantizer = sdnq_quantize_layer_weight(
             weight=weight.clone(),
             layer_class_name=layer_class,
-            weights_dtype="int8",
             group_size=-1,
             svd_rank=32,
             svd_steps=args.svd_steps,
@@ -522,13 +666,14 @@ def compute_matmul_metrics(module, captured_activation, args):
             use_quantized_matmul=True,
             dequantize_fp32=False,
             param_name=f"{layer_class}.weight",
+            **_MM_DTYPE_KWARGS[mm_dtype],
         )
     except Exception as e:
-        return _ineligible_mm_metrics(f"quantize_failed:{type(e).__name__}")
+        return _ineligible_mm_metrics(mm_dtype, f"quantize_failed:{type(e).__name__}")
 
     if not dequantizer.use_quantized_matmul:
         # Eligibility gate at quantizer.py:305-307: dims must be >=32 and divisible by 16.
-        return _ineligible_mm_metrics("dim_gate")
+        return _ineligible_mm_metrics(mm_dtype, "dim_gate")
 
     try:
         if dequantizer.re_quantize_for_matmul:
@@ -539,7 +684,8 @@ def compute_matmul_metrics(module, captured_activation, args):
             qws = dequantizer.quantized_weight_shape if dequantizer.is_packed else None
 
         bias_for_mm = module.bias.to(args.device) if module.bias is not None else None
-        y_int8 = int8_matmul(
+        kernel = fp8_matmul_simulated if use_fp8_simulation else _select_mm_kernel(mm_dtype)
+        y_mm = kernel(
             x.to(args.device),
             weight_for_mm,
             scale_for_mm,
@@ -550,17 +696,17 @@ def compute_matmul_metrics(module, captured_activation, args):
             weights_dtype=dequantizer.weights_dtype,
         )
     except Exception as e:
-        return _ineligible_mm_metrics(f"mm_failed:{type(e).__name__}")
+        return _ineligible_mm_metrics(mm_dtype, f"mm_failed:{type(e).__name__}")
 
-    metrics = compute_metrics(y_ref, y_int8)
+    metrics = compute_metrics(y_ref, y_mm)
     return {
-        "mm_nmse": metrics["nmse"],
-        "mm_sqnr_db": metrics["sqnr_db"],
-        "mm_cosine_sim": metrics["cosine_sim"],
-        "mm_max_abs_err": metrics["max_abs_err"],
-        "mm_relative_l2": metrics["relative_l2"],
-        "mm_eligible": True,
-        "mm_status": "ok",
+        f"mm_{mm_dtype}_nmse": metrics["nmse"],
+        f"mm_{mm_dtype}_sqnr_db": metrics["sqnr_db"],
+        f"mm_{mm_dtype}_cosine_sim": metrics["cosine_sim"],
+        f"mm_{mm_dtype}_max_abs_err": metrics["max_abs_err"],
+        f"mm_{mm_dtype}_relative_l2": metrics["relative_l2"],
+        f"mm_{mm_dtype}_eligible": True,
+        f"mm_{mm_dtype}_status": "simulated" if use_fp8_simulation else "ok",
     }
 
 
@@ -672,7 +818,7 @@ def analyze_component(model_id, subfolder, class_name, cache_dir, args, captured
 
     captured_activations = captured_activations or {}
     mm_enabled_for_component = (
-        args.check_matmul == "int8" and is_matmul_target_component(subfolder)
+        bool(args.check_matmul) and is_matmul_target_component(subfolder)
     )
     dyn_enabled_for_component = (
         args.check_weights == "dynamic" and is_matmul_target_component(subfolder)
@@ -727,12 +873,16 @@ def analyze_component(model_id, subfolder, class_name, cache_dir, args, captured
         # Compute weight stats once per layer
         weight_stats = compute_weight_stats(original_weight)
 
-        # Compute matmul metrics once per layer (only relevant for int8 dtype rows
-        # in target components). Cached across the dtype loop so we don't redo work.
+        # Compute matmul metrics once per layer for each requested mm dtype.
+        # Cached across the dtype loop so we don't redo work. Only attached to
+        # int8 weight rows below (matches the production "test the matmul kernel
+        # against captured activations from the unquantized model" semantics).
         layer_mm_metrics = None
         if mm_enabled_for_component:
             captured = captured_activations.get((subfolder, module_name))
-            layer_mm_metrics = compute_matmul_metrics(module, captured, args)
+            layer_mm_metrics = {}
+            for _mm_dt in args.check_matmul:
+                layer_mm_metrics.update(compute_mm_metrics(module, captured, args, _mm_dt))
 
         # Same idea for the dynamic-quant (weight-side) check.
         layer_dyn_metrics = None
@@ -770,7 +920,7 @@ def analyze_component(model_id, subfolder, class_name, cache_dir, args, captured
 
                         mm_fields = (layer_mm_metrics
                                      if layer_mm_metrics is not None and dtype_str == "int8"
-                                     else EMPTY_MM_METRICS)
+                                     else EMPTY_MM_METRICS_ALL)
                         dyn_fields = (layer_dyn_metrics
                                       if layer_dyn_metrics is not None and dtype_str == "int8"
                                       else EMPTY_DYN_METRICS)
@@ -795,7 +945,7 @@ def analyze_component(model_id, subfolder, class_name, cache_dir, args, captured
                         traceback.print_exc()
                         mm_fields = (layer_mm_metrics
                                      if layer_mm_metrics is not None and dtype_str == "int8"
-                                     else EMPTY_MM_METRICS)
+                                     else EMPTY_MM_METRICS_ALL)
                         dyn_fields = (layer_dyn_metrics
                                       if layer_dyn_metrics is not None and dtype_str == "int8"
                                       else EMPTY_DYN_METRICS)
@@ -846,22 +996,24 @@ def read_csv(csv_path):
                     row[key] = float(row[key])
                 except (ValueError, KeyError):
                     row[key] = float("inf")
-            for key in ("mm_nmse", "mm_sqnr_db", "mm_cosine_sim",
-                        "mm_max_abs_err", "mm_relative_l2"):
-                raw = row.get(key, "")
-                if raw == "" or raw is None:
-                    row[key] = ""
+            for mm_dt in MM_DTYPES:
+                for suffix in ("nmse", "sqnr_db", "cosine_sim", "max_abs_err", "relative_l2"):
+                    key = f"mm_{mm_dt}_{suffix}"
+                    raw = row.get(key, "")
+                    if raw == "" or raw is None:
+                        row[key] = ""
+                    else:
+                        try:
+                            row[key] = float(raw)
+                        except (TypeError, ValueError):
+                            row[key] = float("nan")
+                elig_key = f"mm_{mm_dt}_eligible"
+                elig_raw = row.get(elig_key, "")
+                if elig_raw in ("", None):
+                    row[elig_key] = ""
                 else:
-                    try:
-                        row[key] = float(raw)
-                    except (TypeError, ValueError):
-                        row[key] = float("nan")
-            mm_elig_raw = row.get("mm_eligible", "")
-            if mm_elig_raw in ("", None):
-                row["mm_eligible"] = ""
-            else:
-                row["mm_eligible"] = mm_elig_raw == "True"
-            row.setdefault("mm_status", "")
+                    row[elig_key] = elig_raw == "True"
+                row.setdefault(f"mm_{mm_dt}_status", "")
 
             # dyn_* coercion
             dyn_loss_raw = row.get("dyn_int8_loss", "")
@@ -889,12 +1041,18 @@ def write_csv(results, output_path):
     if not results:
         print("No results to write.")
         return
+    mm_fields = []
+    for mm_dt in MM_DTYPES:
+        mm_fields.extend([
+            f"mm_{mm_dt}_nmse", f"mm_{mm_dt}_sqnr_db", f"mm_{mm_dt}_cosine_sim",
+            f"mm_{mm_dt}_max_abs_err", f"mm_{mm_dt}_relative_l2",
+            f"mm_{mm_dt}_eligible", f"mm_{mm_dt}_status",
+        ])
     fieldnames = ["component", "param_name", "layer_class", "shape", "numel",
                   "weights_dtype", "use_svd", "svd_rank", "group_size", "requested_group_size",
                   "nmse", "sqnr_db", "cosine_sim", "max_abs_err", "relative_l2",
                   "kurtosis", "outlier_ratio", "dynamic_range_ratio",
-                  "mm_nmse", "mm_sqnr_db", "mm_cosine_sim", "mm_max_abs_err", "mm_relative_l2",
-                  "mm_eligible", "mm_status",
+                  *mm_fields,
                   "dyn_chosen_dtype", "dyn_int8_safe", "dyn_int8_loss", "dyn_status"]
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1502,6 +1660,9 @@ def _prepare_auto_config_data(results, args):
         "rank_distribution": rank_distribution,
         "pipeline_config_json": pipeline_config_json,
         "has_matmul": False,
+        "has_int8_matmul": False,
+        "has_fp8_matmul": False,
+        "has_fp16_matmul": False,
         "mm_nmse_lookup": {},
         "has_dynamic_check": False,
         "dyn_lookup": {},
@@ -1559,7 +1720,8 @@ def prepare_summary_data(results, args):
 
     # Build lookups: param_name -> {column_key -> nmse}
     nmse_lookup = {}
-    mm_nmse_lookup = {}  # param_name -> matmul-output nmse (only populated when --check-matmul=int8)
+    # param_name -> {mm_dtype: nmse}, populated when --check-matmul includes a dtype
+    mm_nmse_lookup = {}
     dyn_lookup = {}  # param_name -> {chosen_dtype, int8_safe} (only when --check-weights=dynamic)
     for r in results:
         if r["use_svd"] != use_svd_filter:
@@ -1577,11 +1739,15 @@ def prepare_summary_data(results, args):
             rgs = r.get("requested_group_size", args.group_size)
             if rgs == args.group_size:
                 nmse_lookup[key][r["weights_dtype"]] = r["nmse"]
-        # Capture mm_nmse from any int8 row for this layer (the value is layer-level, not per-config).
+        # Capture per-mm-dtype nmse from any int8 row for this layer (layer-level, not per-config).
         if r["weights_dtype"] == "int8" and key not in mm_nmse_lookup:
-            mm_val = r.get("mm_nmse", "")
-            if isinstance(mm_val, (int, float)):
-                mm_nmse_lookup[key] = float(mm_val)
+            per_dtype = {}
+            for mm_dt in MM_DTYPES:
+                mm_val = r.get(f"mm_{mm_dt}_nmse", "")
+                if isinstance(mm_val, (int, float)):
+                    per_dtype[mm_dt] = float(mm_val)
+            if per_dtype:
+                mm_nmse_lookup[key] = per_dtype
         # Same for dyn_chosen_dtype.
         if r["weights_dtype"] == "int8" and key not in dyn_lookup:
             chosen = r.get("dyn_chosen_dtype", "")
@@ -1592,7 +1758,10 @@ def prepare_summary_data(results, args):
                     "int8_safe": bool(int8_safe) if int8_safe != "" else None,
                     "status": r.get("dyn_status", ""),
                 }
-    has_matmul = bool(mm_nmse_lookup)
+    has_int8_matmul = any("int8" in v for v in mm_nmse_lookup.values())
+    has_fp8_matmul = any("fp8" in v for v in mm_nmse_lookup.values())
+    has_fp16_matmul = any("fp16" in v for v in mm_nmse_lookup.values())
+    has_matmul = has_int8_matmul or has_fp8_matmul or has_fp16_matmul
     has_dynamic_check = bool(dyn_lookup)
 
     # Classify layers
@@ -1679,22 +1848,25 @@ def prepare_summary_data(results, args):
                 "text_color": fg,
             }
 
-        mm_val = mm_nmse_lookup.get(pname)
-        if mm_val is not None and not (isinstance(mm_val, float) and math.isnan(mm_val)):
-            mm_bg, mm_fg = nmse_to_css_color(mm_val, args.skip_threshold, args.promote_threshold)
-            mm_cell = {
-                "value": mm_val,
-                "display": fmt_nmse(mm_val),
-                "bg_color": mm_bg,
-                "text_color": mm_fg,
-            }
-        else:
-            mm_cell = {
-                "value": float("nan"),
-                "display": "N/A",
-                "bg_color": "#2a2a4a",
-                "text_color": "#8899aa",
-            }
+        mm_cells = {}
+        per_dtype_nmse = mm_nmse_lookup.get(pname, {})
+        for mm_dt in MM_DTYPES:
+            mm_val = per_dtype_nmse.get(mm_dt)
+            if mm_val is not None and not (isinstance(mm_val, float) and math.isnan(mm_val)):
+                mm_bg, mm_fg = nmse_to_css_color(mm_val, args.skip_threshold, args.promote_threshold)
+                mm_cells[mm_dt] = {
+                    "value": mm_val,
+                    "display": fmt_nmse(mm_val),
+                    "bg_color": mm_bg,
+                    "text_color": mm_fg,
+                }
+            else:
+                mm_cells[mm_dt] = {
+                    "value": float("nan"),
+                    "display": "N/A",
+                    "bg_color": "#2a2a4a",
+                    "text_color": "#8899aa",
+                }
 
         dyn_info = dyn_lookup.get(pname)
         if dyn_info is None:
@@ -1731,7 +1903,7 @@ def prepare_summary_data(results, args):
             "shape": r["shape"],
             "kurtosis": kurt_str,
             "nmse_by_column": nmse_by_column,
-            "mm_nmse": mm_cell,
+            "mm_cells": mm_cells,
             "dyn_choice": dyn_cell,
             "status": status,
             "promote_key": promote_layers.get(pname),
@@ -2005,6 +2177,9 @@ def prepare_summary_data(results, args):
         "rank_comparison_ranks": rank_comparison_ranks,
         "config_snippet": config_snippet,
         "has_matmul": has_matmul,
+        "has_int8_matmul": has_int8_matmul,
+        "has_fp8_matmul": has_fp8_matmul,
+        "has_fp16_matmul": has_fp16_matmul,
         "mm_nmse_lookup": mm_nmse_lookup,
         "has_dynamic_check": has_dynamic_check,
         "dyn_lookup": dyn_lookup,
@@ -2167,6 +2342,9 @@ def build_html_report(summary, args, chart_base64=None):
         config_snippets_html=config_snippets_html,
         chart_base64=chart_base64,
         has_matmul=summary.get("has_matmul", False),
+        has_int8_matmul=summary.get("has_int8_matmul", False),
+        has_fp8_matmul=summary.get("has_fp8_matmul", False),
+        has_fp16_matmul=summary.get("has_fp16_matmul", False),
         has_dynamic_check=summary.get("has_dynamic_check", False),
     )
     return html
@@ -2727,24 +2905,115 @@ def print_plain_summary(results, args):
     print()
 
 
-def _collect_matmul_flagged(results, skip_threshold):
-    """Return dict[component] -> list of (param_name, mm_nmse), plus fail_modes counter."""
+def _layer_mm_summary(row):
+    """Reduce a row's ``mm_<dtype>_*`` fields to per-dtype state.
+
+    Returns ``{mm_dtype: {"state": str, "nmse": float|None, "status": str}}`` where
+    ``state`` is one of ``"pass"``, ``"fail"``, ``"ineligible"``, or ``"missing"``
+    (latter when the dtype wasn't tested for this row).
+    """
+    out = {}
+    for mm_dt in MM_DTYPES:
+        elig = row.get(f"mm_{mm_dt}_eligible")
+        nmse = row.get(f"mm_{mm_dt}_nmse")
+        status = row.get(f"mm_{mm_dt}_status", "")
+        if elig == "" or elig is None:
+            out[mm_dt] = {"state": "missing", "nmse": None, "status": status}
+            continue
+        if elig is False:
+            out[mm_dt] = {"state": "ineligible", "nmse": None, "status": status}
+            continue
+        if not isinstance(nmse, (int, float)) or math.isnan(nmse):
+            out[mm_dt] = {"state": "missing", "nmse": None, "status": status}
+            continue
+        out[mm_dt] = {"state": "pending", "nmse": float(nmse), "status": status}
+    return out
+
+
+_MM_PROD_DTYPE = {"int8": "int8", "fp8": "float8_e4m3fn", "fp16": "float16"}
+
+
+def _classify_mm_per_layer(row, skip_threshold, catastrophic_threshold=1.0):
+    """Resolve per-dtype state against thresholds and pick the cheapest passing
+    dtype as the suggested matmul dispatch override. Falls through to the
+    cheapest soft-fail dtype before emitting ``use_quantized_matmul: False``.
+
+    States after resolution:
+    - ``pass``: ``nmse <= skip_threshold``
+    - ``soft_fail``: above ``skip_threshold`` but finite and ``<= catastrophic_threshold``
+    - ``catastrophic``: non-finite or above ``catastrophic_threshold``
+    - ``ineligible`` / ``missing`` carry through from ``_layer_mm_summary``.
+
+    Override priority:
+    1. cheapest ``pass`` dtype (no override emitted if cheapest tested already passes)
+    2. cheapest ``soft_fail`` dtype (preferred over catastrophic siblings, since
+       the alternative ``use_quantized_matmul: False`` falls back to dequant +
+       ``F.linear`` at the model dtype, which is itself fp16/bf16 precision —
+       a soft-fail FP8 is strictly better than that fallback when the layer
+       would otherwise be catastrophic)
+    3. ``{"use_quantized_matmul": False}`` only when every tested dtype is
+       catastrophic.
+    """
+    per_dtype = _layer_mm_summary(row)
+    for info in per_dtype.values():
+        if info["state"] != "pending":
+            continue
+        nmse = info["nmse"]
+        if nmse is None or not math.isfinite(nmse) or nmse > catastrophic_threshold:
+            info["state"] = "catastrophic"
+        elif nmse <= skip_threshold:
+            info["state"] = "pass"
+        else:
+            info["state"] = "soft_fail"
+
+    tested = [dt for dt in MM_DTYPES if per_dtype[dt]["state"] in ("pass", "soft_fail", "catastrophic")]
+    if not tested:
+        return per_dtype, None
+    cheapest = tested[0]
+    cheapest_state = per_dtype[cheapest]["state"]
+    if cheapest_state == "pass":
+        return per_dtype, None
+
+    # First preference: redirect to a softer dtype that passes (real improvement
+    # for both soft_fail and catastrophic cheapest layers).
+    for mm_dt in tested[1:]:
+        if per_dtype[mm_dt]["state"] == "pass":
+            return per_dtype, {"quantized_matmul_dtype": _MM_PROD_DTYPE[mm_dt]}
+
+    # No passing dtype. Soft-fail rescue only fires when the cheapest dtype is
+    # catastrophic — going from soft_fail to soft_fail is no improvement and
+    # the user's skip_threshold says neither is acceptable, so we'd rather
+    # disable the kernel and fall back to dequant + F.linear.
+    if cheapest_state == "catastrophic":
+        for mm_dt in tested[1:]:
+            if per_dtype[mm_dt]["state"] == "soft_fail":
+                return per_dtype, {"quantized_matmul_dtype": _MM_PROD_DTYPE[mm_dt]}
+
+    # No usable redirection: every tested dtype is bad in a way the user's
+    # thresholds do not consider acceptable.
+    return per_dtype, {"use_quantized_matmul": False}
+
+
+def _collect_matmul_flagged(results, skip_threshold, catastrophic_threshold=1.0):
+    """Return ``(grouped, fail_modes)`` where ``grouped[component]`` is a list of
+    ``(param_name, override_dict, per_dtype_state)`` tuples for layers that need a
+    matmul dispatch override. ``fail_modes`` counts ineligibility statuses across
+    all dtypes for diagnostics.
+    """
     grouped = {}
     seen = set()
     fail_modes = {}
     for r in results:
         if r.get("weights_dtype") != "int8":
             continue
-        elig = r.get("mm_eligible")
-        if elig == "" or elig is False:
-            status = r.get("mm_status", "")
-            if status:
-                fail_modes[status] = fail_modes.get(status, 0) + 1
-            continue
-        nmse_val = r.get("mm_nmse")
-        if not isinstance(nmse_val, (int, float)) or math.isnan(nmse_val):
-            continue
-        if nmse_val <= skip_threshold:
+        per_dtype, override = _classify_mm_per_layer(r, skip_threshold, catastrophic_threshold)
+        # Record ineligibility statuses regardless of whether an override fires
+        # (used for the diagnostic breakdown printed at the end).
+        for mm_dt, info in per_dtype.items():
+            if info["state"] == "ineligible" and info["status"]:
+                key_status = f"{mm_dt}:{info['status']}"
+                fail_modes[key_status] = fail_modes.get(key_status, 0) + 1
+        if override is None:
             continue
         comp = r.get("component", "")
         pname = r.get("param_name", "")
@@ -2752,7 +3021,7 @@ def _collect_matmul_flagged(results, skip_threshold):
         if key in seen:
             continue
         seen.add(key)
-        grouped.setdefault(comp, []).append((pname, nmse_val))
+        grouped.setdefault(comp, []).append((pname, override, per_dtype))
     return grouped, fail_modes
 
 
@@ -2808,11 +3077,13 @@ def build_skip_config(results, args):
     overrides). Returns an empty dict when neither check is active.
     """
     weight_active = args.check_weights == "dynamic"
-    matmul_active = args.check_matmul == "int8"
+    matmul_active = bool(args.check_matmul)
     if not weight_active and not matmul_active:
         return {}
 
-    mm_grouped = _collect_matmul_flagged(results, args.skip_threshold)[0] if matmul_active else {}
+    mm_grouped = _collect_matmul_flagged(
+        results, args.skip_threshold, args.mm_catastrophic_threshold
+    )[0] if matmul_active else {}
     dyn_by_component = _collect_dynamic_flagged(results)[0] if weight_active else {}
 
     # Determine the union of components that have any findings.
@@ -2836,10 +3107,9 @@ def build_skip_config(results, args):
             by_dtype.setdefault(entry["chosen"], []).append(entry["param"])
         modules_dtype_dict = {k: sorted(v) for k, v in sorted(by_dtype.items())}
 
-        modules_quant_config = {
-            pname: {"use_quantized_matmul": False}
-            for pname in sorted(p for p, _ in mm_layers)
-        }
+        modules_quant_config = {}
+        for pname, override, _per_dtype in sorted(mm_layers, key=lambda t: t[0]):
+            modules_quant_config[pname] = dict(override)
 
         entry = {
             "weights_dtype": "int8",
@@ -2926,12 +3196,12 @@ def _print_skip_suggestions(results, args):
     simultaneously, since they're orthogonal axes (weight precision vs. kernel choice).
     """
     weight_active = args.check_weights == "dynamic"
-    matmul_active = args.check_matmul == "int8"
+    matmul_active = bool(args.check_matmul)
     if not weight_active and not matmul_active:
         return
 
     mm_grouped, mm_fail_modes = ({}, {}) if not matmul_active else _collect_matmul_flagged(
-        results, args.skip_threshold
+        results, args.skip_threshold, args.mm_catastrophic_threshold
     )
     dyn_by_component, dyn_status_counts = ({}, {}) if not weight_active else _collect_dynamic_flagged(
         results
@@ -2951,6 +3221,34 @@ def _print_skip_suggestions(results, args):
             print(f"  dynamic-quant statuses: {dyn_status_counts}")
         return
 
+    def _bucket_mm_layers(mm_layers):
+        """Split mm-flagged layers by their override kind: per-dtype dispatch vs full off.
+
+        Each bucket holds sorted ``param_name`` strings. ``soft_rescue_count``
+        tallies how many of the redirected layers are soft-fail rescues (the
+        target dtype is above ``skip_threshold`` but below
+        ``mm_catastrophic_threshold``) vs real passes.
+        """
+        to_fp8 = []
+        to_fp16 = []
+        to_off = []
+        soft_rescue_count = 0
+        for pname, override, per_dtype in mm_layers:
+            if override.get("use_quantized_matmul") is False:
+                to_off.append(pname)
+                continue
+            new_mm = override.get("quantized_matmul_dtype")
+            target_short = {"float8_e4m3fn": "fp8", "float16": "fp16"}.get(new_mm)
+            if target_short and per_dtype.get(target_short, {}).get("state") == "soft_fail":
+                soft_rescue_count += 1
+            if new_mm == "float8_e4m3fn":
+                to_fp8.append(pname)
+            elif new_mm == "float16":
+                to_fp16.append(pname)
+            else:
+                to_off.append(pname)
+        return sorted(to_fp8), sorted(to_fp16), sorted(to_off), soft_rescue_count
+
     for comp in components:
         weight_layers = dyn_by_component.get(comp, [])
         mm_layers = mm_grouped.get(comp, [])
@@ -2965,14 +3263,22 @@ def _print_skip_suggestions(results, args):
                 continue
             by_dtype.setdefault(entry["chosen"], []).append(entry["param"])
 
-        mm_names = sorted(p for p, _ in mm_layers)
+        mm_to_fp8, mm_to_fp16, mm_to_off, mm_soft_rescue = _bucket_mm_layers(mm_layers)
 
         print()
         print(f"# {comp}")
         print(
             f"#   weight-side flagged: {len(weight_layers)}  "
-            f"matmul-side flagged: {len(mm_layers)}"
+            f"matmul-side flagged: {len(mm_layers)} "
+            f"(int8->fp8: {len(mm_to_fp8)}, int8/fp8->fp16: {len(mm_to_fp16)}, "
+            f"all dtypes fail: {len(mm_to_off)})"
         )
+        if matmul_active and mm_soft_rescue:
+            print(
+                f"#   matmul soft-fail rescues: {mm_soft_rescue} "
+                f"(redirected to a softer dtype that's above skip-threshold but "
+                f"below catastrophic-threshold; preferred over no-MM fallback)"
+            )
         if weight_active:
             print(
                 f"#   weight threshold: {args.weight_threshold}    "
@@ -2980,8 +3286,10 @@ def _print_skip_suggestions(results, args):
             )
         if matmul_active:
             print(
-                f"#   matmul threshold: {args.skip_threshold}    "
-                f"(mm_nmse > threshold => INT8 GEMM corrupts output)"
+                f"#   matmul thresholds: skip={args.skip_threshold} "
+                f"catastrophic={args.mm_catastrophic_threshold}    "
+                f"(per-dtype nmse > skip => fail; > catastrophic or non-finite => "
+                f"unrescuable)"
             )
 
         if no_dtype_layers:
@@ -3009,18 +3317,23 @@ def _print_skip_suggestions(results, args):
                 print("    ],")
             print("}")
 
-        if mm_names:
+        if mm_to_fp8 or mm_to_fp16 or mm_to_off:
             print()
             print(
-                f"# Layers where INT8 GEMM corrupts output ({len(mm_names)} layers): "
-                f"keep INT8 weight, disable per-layer matmul."
+                f"# Per-layer matmul dispatch overrides "
+                f"({len(mm_to_fp8) + len(mm_to_fp16) + len(mm_to_off)} layers). "
+                f"Cheapest passing matmul dtype is selected per layer."
             )
             print("modules_quant_config = {")
-            for pname in mm_names:
-                print(f'    "{pname}": {{"use_quantized_matmul": False}},')
+            for pname in mm_to_fp8:
+                print(f'    "{pname}": {{"quantized_matmul_dtype": "float8_e4m3fn"}},  # int8 fail -> fp8')
+            for pname in mm_to_fp16:
+                print(f'    "{pname}": {{"quantized_matmul_dtype": "float16"}},  # int8/fp8 fail -> fp16')
+            for pname in mm_to_off:
+                print(f'    "{pname}": {{"use_quantized_matmul": False}},  # all dtypes fail')
             print("}")
 
-        if not (no_dtype_layers or by_dtype or mm_names):
+        if not (no_dtype_layers or by_dtype or mm_to_fp8 or mm_to_fp16 or mm_to_off):
             print("#   (no overrides needed for this component)")
 
     if components:
@@ -3075,12 +3388,15 @@ def main():
         csv_dtypes = sorted(set(r["weights_dtype"] for r in all_results))
         csv_group_sizes = sorted(set(r["requested_group_size"] for r in all_results))
         csv_svd_ranks = sorted(set(r["svd_rank"] for r in all_results if r["use_svd"]))
-        # Infer --check-matmul from CSV: if any int8 row has a numeric mm_nmse, treat as int8 MM data
-        if args.check_matmul == "none":
-            for r in all_results:
-                if r.get("weights_dtype") == "int8" and isinstance(r.get("mm_nmse"), (int, float)):
-                    args.check_matmul = "int8"
-                    break
+        # Infer --check-matmul from CSV: probe per-dtype mm_<dtype>_nmse columns
+        if not args.check_matmul:
+            inferred = []
+            for dt in ("int8", "fp8", "fp16"):
+                key = f"mm_{dt}_nmse"
+                if any(isinstance(r.get(key), (int, float)) for r in all_results):
+                    inferred.append(dt)
+            if inferred:
+                args.check_matmul = inferred
         # Infer --check-weights from CSV: if any int8 row has a non-empty dyn_chosen_dtype, treat as dynamic-quant data
         if args.check_weights == "none":
             for r in all_results:
@@ -3140,12 +3456,10 @@ def main():
     print(f"  Weight check: {args.check_weights}")
 
     captured_activations = {}
-    if args.check_matmul == "int8":
-        if "int8" not in args.dtypes:
-            print("[calibration] --check-matmul=int8 set but 'int8' not in --dtypes; skipping calibration.")
-        elif args.prompt_set is None:
+    if args.check_matmul:
+        if args.prompt_set is None:
             print(
-                "ERROR: --check-matmul=int8 requires --prompt-set {booru,natural}.\n"
+                "ERROR: --check-matmul requires --prompt-set {booru,natural}.\n"
                 "       Pick 'booru' for tag-trained models (Anima, Pony, Illustrious, NoobAI, ...)\n"
                 "       Pick 'natural' for caption-trained models (Z-Image, SD3.5, Flux, ...)."
             )

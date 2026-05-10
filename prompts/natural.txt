@@ -8,8 +8,10 @@
 # models is conditioned on full English sentences with normal grammar.
 #
 # Prompts are intentionally ~50 BPE tokens or longer so that text-encoder
-# Linear layers receive activations above the 32-token int8_matmul gate
-# at scripts/analyze_quantization_sensitivity.py:compute_matmul_metrics.
+# Linear layers receive activations above the 32-token short-circuit in the
+# int8 and fp8 matmul kernels (linear_int8.py:50, linear_fp8.py:46,
+# linear_fp8_tensorwise.py:51). FP16 matmul has no short-circuit so it
+# always benefits from longer activations regardless.
 #
 # One prompt per non-comment, non-blank line. matmul calibration uses line 0;
 # future multi-sample tests can consume all entries.
