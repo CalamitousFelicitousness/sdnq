@@ -23,4 +23,4 @@ def check_mats(input: torch.Tensor, weight: torch.Tensor, matmul_dtype: str = "i
 
 @inference_context()
 def quantized_linear_forward(self, input: torch.FloatTensor) -> torch.FloatTensor:
-    return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, self.zero_point, self.svd_up, self.svd_down, codebook=self.codebook), self.bias)
+    return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, self.zero_point, self.svd_up, self.svd_down, codebook=self.codebook, svd_up_q=self.svd_up_q, svd_up_scale=self.svd_up_scale, svd_down_q=self.svd_down_q, svd_down_scale=self.svd_down_scale), self.bias)

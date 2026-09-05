@@ -9,8 +9,9 @@ class SDNQLayer(torch.nn.Module):
         for key, value in original_layer.__dict__.items():
             if key not in {"forward", "forward_func", "original_class", "state_dict", "load_state_dict"}:
                 setattr(self, key, value)
-        if not hasattr(self, "codebook"):
-            self.codebook = None # set by codebook dtypes; None on every other quantized layer
+        for key in ("codebook", "svd_up_q", "svd_up_scale", "svd_down_q", "svd_down_scale"):
+            if not hasattr(self, key): # codebook dtypes set the codebook, adapter hosting sets the rowwise-int8 svd channel; None otherwise
+                setattr(self, key, None)
         self.original_class = original_layer.__class__
         self.forward_func = forward_func
 
@@ -22,8 +23,8 @@ class SDNQLayer(torch.nn.Module):
         if self.weight.__class__.__name__ == "SDNQTensor": # pylint: disable=access-member-before-definition
             self.weight = torch.nn.Parameter(self.weight.dequantize(), requires_grad=True) # pylint: disable=attribute-defined-outside-init
         elif hasattr(self, "sdnq_dequantizer"):
-            self.weight = torch.nn.Parameter(self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, codebook=self.codebook, skip_quantized_matmul=self.sdnq_dequantizer.use_quantized_matmul), requires_grad=True) # pylint: disable=attribute-defined-outside-init
-            del self.sdnq_dequantizer, self.scale, self.zero_point, self.svd_up, self.svd_down, self.codebook
+            self.weight = torch.nn.Parameter(self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, codebook=self.codebook, svd_up_q=self.svd_up_q, svd_up_scale=self.svd_up_scale, svd_down_q=self.svd_down_q, svd_down_scale=self.svd_down_scale, skip_quantized_matmul=self.sdnq_dequantizer.use_quantized_matmul), requires_grad=True) # pylint: disable=attribute-defined-outside-init
+            del self.sdnq_dequantizer, self.scale, self.zero_point, self.svd_up, self.svd_down, self.codebook, self.svd_up_q, self.svd_up_scale, self.svd_down_q, self.svd_down_scale
         self.__class__ = self.original_class # pylint: disable=attribute-defined-outside-init
         del self.original_class, self.forward_func
         return self

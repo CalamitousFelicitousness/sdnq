@@ -84,6 +84,10 @@ quantized_model = AutoModel.from_pretrained(model_path, quantization_config=sdnq
 
 `weights_dtype="cb4"` (also `cb2`, `cb3`, `cb5`, `cb6`) stores packed unsigned indices into one Lloyd-Max codebook per layer. The codebook is int8 and shared by the whole layer, a symmetric per-group scale carries the magnitude and there is no zero point, so a codebook layer spends the same sidecar bytes as an affine layer with twice the group size. Auto `group_size=0` picks that halved group (cb4 linear: 32, cb2: 8) and row-wise at 6 bits and above. At `group_size=-1` with `use_quantized_matmul=True` the indices gather int8 levels straight into the int8 matmul kernels with no requantization; grouped layers requantize per forward like `uint4`. `codebook_steps` sets the fit iterations. With `use_dynamic_quantization` the codebook rungs are walked only when a codebook dtype is requested. The dtypes are inference only, keep the shared codebook in a `codebook` tensor beside `scale`, and can not be combined with `use_codebook`, which fits per-row levels into the scale slot instead.
 
+### Rowwise-int8 svd factor channel:  
+
+Linear layers carry four optional runtime tensors beside `svd_up` and `svd_down`: `svd_up_q` and `svd_down_q` (int8) with `svd_up_scale` and `svd_down_scale` (fp32 per row). The dequantizer and the matmul forwards dequantize this pair with a single fp32 rounding and concatenate it behind the full-precision pair, so callers that host low-rank adapters on the svd channel can keep them resident at int8 while the applied values match a full-precision concat. Quantized-matmul layers store the channel transposed, like the full-precision pair. The channel is never saved with the model.
+
 ### Example code for saving a quantized Diffusers or Transformers model:  
 
 ```py

@@ -4,7 +4,7 @@ import torch
 
 from .common import dtype_dict, compile_func, conv_types, conv_transpose_types, inference_context
 from .kernel_wrappers import use_contiguous_int8_mm, use_contiguous_fp16_mm, use_tensorwise_fp8_matmul, is_fp8_compile_supported
-from .quant_utils import quantize_int_mm, quantize_uint_mm, quantize_fp_mm, rotate_hadamard, get_hadamard
+from .quant_utils import quantize_int_mm, quantize_uint_mm, quantize_fp_mm, rotate_hadamard, get_hadamard, merge_svd_quantized
 from .packed_int import unpack_int
 from .packed_float import unpack_float
 from .layers import SDNQLayer
@@ -17,6 +17,10 @@ def dequantize_asymmetric(
     zero_point: torch.FloatTensor,
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
+    svd_up_q: torch.CharTensor | None = None,
+    svd_up_scale: torch.FloatTensor | None = None,
+    svd_down_q: torch.CharTensor | None = None,
+    svd_down_scale: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     dtype: torch.dtype | None = None,
     result_shape: torch.Size | None = None,
@@ -29,6 +33,9 @@ def dequantize_asymmetric(
     if result_shape is not None:
         result = result.view(result_shape)
     is_conv = bool(result.ndim > 2 and weight.ndim > 2)
+    if svd_up_q is not None:
+        dim_up, dim_down = (0, 1) if skip_quantized_matmul else (1, 0) # quantized-matmul layers store factors transposed, so the concat axes flip with the layout
+        svd_up, svd_down = merge_svd_quantized(svd_up, svd_down, svd_up_q, svd_up_scale, svd_down_q, svd_down_scale, dim_up, dim_down, dtype if dtype is not None else scale.dtype)
     if svd_up is not None:
         if skip_quantized_matmul:
             svd_up = svd_up.t().contiguous()
@@ -53,6 +60,10 @@ def dequantize_symmetric(
     scale: torch.FloatTensor,
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
+    svd_up_q: torch.CharTensor | None = None,
+    svd_up_scale: torch.FloatTensor | None = None,
+    svd_down_q: torch.CharTensor | None = None,
+    svd_down_scale: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     dtype: torch.dtype | None = None,
     result_shape: torch.Size | None = None,
@@ -65,6 +76,9 @@ def dequantize_symmetric(
     if result_shape is not None:
         result = result.view(result_shape)
     is_conv = bool(result.ndim > 2 and weight.ndim > 2)
+    if svd_up_q is not None:
+        dim_up, dim_down = (0, 1) if skip_quantized_matmul else (1, 0) # quantized-matmul layers store factors transposed, so the concat axes flip with the layout
+        svd_up, svd_down = merge_svd_quantized(svd_up, svd_down, svd_up_q, svd_up_scale, svd_down_q, svd_down_scale, dim_up, dim_down, dtype if dtype is not None else scale.dtype)
     if svd_up is not None:
         if skip_quantized_matmul:
             svd_up = svd_up.t().contiguous()
@@ -89,6 +103,10 @@ def dequantize_codebook(
     scale: torch.FloatTensor,
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
+    svd_up_q: torch.CharTensor | None = None,
+    svd_up_scale: torch.FloatTensor | None = None,
+    svd_down_q: torch.CharTensor | None = None,
+    svd_down_scale: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     dtype: torch.dtype | None = None,
     result_shape: torch.Size | None = None,
@@ -112,6 +130,9 @@ def dequantize_codebook(
     if result_shape is not None:
         result = result.view(result_shape)
     is_conv = bool(result.ndim > 2 and weight.ndim > 2)
+    if svd_up_q is not None:
+        dim_up, dim_down = (0, 1) if skip_quantized_matmul else (1, 0) # quantized-matmul layers store factors transposed, so the concat axes flip with the layout
+        svd_up, svd_down = merge_svd_quantized(svd_up, svd_down, svd_up_q, svd_up_scale, svd_down_q, svd_down_scale, dim_up, dim_down, dtype if dtype is not None else scale.dtype)
     if svd_up is not None:
         if skip_quantized_matmul:
             svd_up = svd_up.t().contiguous()
@@ -138,6 +159,10 @@ def dequantize_weight(
     zero_point: torch.FloatTensor | None = None,
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
+    svd_up_q: torch.CharTensor | None = None,
+    svd_up_scale: torch.FloatTensor | None = None,
+    svd_down_q: torch.CharTensor | None = None,
+    svd_down_scale: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     use_codebook: bool = False,
     codebook: torch.CharTensor | None = None,
@@ -152,18 +177,18 @@ def dequantize_weight(
     if dtype_dict[weights_dtype].get("is_codebook", False):
         weight = unpack_int(weight, weights_dtype, quantized_weight_shape)
         weight = codebook[weight.to(dtype=torch.int32)]
-        return dequantize_symmetric(weight, scale, svd_up=svd_up, svd_down=svd_down, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
+        return dequantize_symmetric(weight, scale, svd_up=svd_up, svd_down=svd_down, svd_up_q=svd_up_q, svd_up_scale=svd_up_scale, svd_down_q=svd_down_q, svd_down_scale=svd_down_scale, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
     if dtype_dict[weights_dtype]["is_packed"]:
         if dtype_dict[weights_dtype]["is_integer"]:
             weight = unpack_int(weight, weights_dtype, quantized_weight_shape, dtype=scale.dtype if not use_codebook else torch.int32)
         else:
             weight = unpack_float(weight, weights_dtype, quantized_weight_shape)
     if use_codebook:
-        return dequantize_codebook(weight, scale, svd_up=svd_up, svd_down=svd_down, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul, layer_class_name=layer_class_name, group_size=group_size)
+        return dequantize_codebook(weight, scale, svd_up=svd_up, svd_down=svd_down, svd_up_q=svd_up_q, svd_up_scale=svd_up_scale, svd_down_q=svd_down_q, svd_down_scale=svd_down_scale, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul, layer_class_name=layer_class_name, group_size=group_size)
     elif dtype_dict[weights_dtype]["is_unsigned"]:
-        return dequantize_asymmetric(weight, scale, zero_point, svd_up=svd_up, svd_down=svd_down, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
+        return dequantize_asymmetric(weight, scale, zero_point, svd_up=svd_up, svd_down=svd_down, svd_up_q=svd_up_q, svd_up_scale=svd_up_scale, svd_down_q=svd_down_q, svd_down_scale=svd_down_scale, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
     else:
-        return dequantize_symmetric(weight, scale, svd_up=svd_up, svd_down=svd_down, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
+        return dequantize_symmetric(weight, scale, svd_up=svd_up, svd_down=svd_down, svd_up_q=svd_up_q, svd_up_scale=svd_up_scale, svd_down_q=svd_down_q, svd_down_scale=svd_down_scale, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
 
 
 @inference_context()
@@ -212,6 +237,10 @@ def re_quantize_matmul(
     zero_point: torch.FloatTensor | None = None,
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
+    svd_up_q: torch.CharTensor | None = None,
+    svd_up_scale: torch.FloatTensor | None = None,
+    svd_down_q: torch.CharTensor | None = None,
+    svd_down_scale: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     use_codebook: bool = False,
     codebook: torch.CharTensor | None = None,
@@ -227,6 +256,10 @@ def re_quantize_matmul(
         zero_point=zero_point,
         svd_up=svd_up,
         svd_down=svd_down,
+        svd_up_q=svd_up_q,
+        svd_up_scale=svd_up_scale,
+        svd_down_q=svd_down_q,
+        svd_down_scale=svd_down_scale,
         hadamard=hadamard,
         use_codebook=use_codebook,
         codebook=codebook,
@@ -363,6 +396,10 @@ class SDNQDequantizer:
         zero_point: torch.FloatTensor | None = None,
         svd_up: torch.FloatTensor | None = None,
         svd_down: torch.FloatTensor | None = None,
+        svd_up_q: torch.CharTensor | None = None,
+        svd_up_scale: torch.FloatTensor | None = None,
+        svd_down_q: torch.CharTensor | None = None,
+        svd_down_scale: torch.FloatTensor | None = None,
         codebook: torch.CharTensor | None = None,
         hadamard: torch.FloatTensor | None = None,
         non_hadamard: bool = True,
@@ -383,6 +420,10 @@ class SDNQDequantizer:
             zero_point=zero_point,
             svd_up=svd_up,
             svd_down=svd_down,
+            svd_up_q=svd_up_q,
+            svd_up_scale=svd_up_scale,
+            svd_down_q=svd_down_q,
+            svd_down_scale=svd_down_scale,
             hadamard=hadamard,
             use_codebook=self.use_codebook,
             codebook=codebook,
@@ -401,6 +442,10 @@ class SDNQDequantizer:
         zero_point: torch.FloatTensor | None = None,
         svd_up: torch.FloatTensor | None = None,
         svd_down: torch.FloatTensor | None = None,
+        svd_up_q: torch.CharTensor | None = None,
+        svd_up_scale: torch.FloatTensor | None = None,
+        svd_down_q: torch.CharTensor | None = None,
+        svd_down_scale: torch.FloatTensor | None = None,
         codebook: torch.CharTensor | None = None,
         hadamard: torch.FloatTensor | None = None,
         skip_quantized_matmul: bool = False,
@@ -426,6 +471,10 @@ class SDNQDequantizer:
             zero_point=zero_point,
             svd_up=svd_up,
             svd_down=svd_down,
+            svd_up_q=svd_up_q,
+            svd_up_scale=svd_up_scale,
+            svd_down_q=svd_down_q,
+            svd_down_scale=svd_down_scale,
             hadamard=hadamard,
             use_codebook=self.use_codebook,
             codebook=codebook,
