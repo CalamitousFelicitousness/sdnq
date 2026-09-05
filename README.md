@@ -80,6 +80,10 @@ sdnq_config = SDNQConfig(
 quantized_model = AutoModel.from_pretrained(model_path, quantization_config=sdnq_config)
 ```
 
+### Codebook weight dtypes (cb2 - cb6):  
+
+`weights_dtype="cb4"` (also `cb2`, `cb3`, `cb5`, `cb6`) stores packed unsigned indices into one Lloyd-Max codebook per layer. The codebook is int8 and shared by the whole layer, a symmetric per-group scale carries the magnitude and there is no zero point, so a codebook layer spends the same sidecar bytes as an affine layer with twice the group size. Auto `group_size=0` picks that halved group (cb4 linear: 32, cb2: 8) and row-wise at 6 bits and above. At `group_size=-1` with `use_quantized_matmul=True` the indices gather int8 levels straight into the int8 matmul kernels with no requantization; grouped layers requantize per forward like `uint4`. `codebook_steps` sets the fit iterations. With `use_dynamic_quantization` the codebook rungs are walked only when a codebook dtype is requested. The dtypes are inference only, keep the shared codebook in a `codebook` tensor beside `scale`, and can not be combined with `use_codebook`, which fits per-row levels into the scale slot instead.
+
 ### Example code for saving a quantized Diffusers or Transformers model:  
 
 ```py

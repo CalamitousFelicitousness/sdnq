@@ -30,12 +30,16 @@ def get_int8_matmul_inputs(
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
     zero_point: torch.FloatTensor | None = None,
+    codebook: torch.CharTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     quantized_weight_shape: torch.Size | None = None,
     weights_dtype: str | None = None,
 ) -> torch.FloatTensor:
     if quantized_weight_shape is not None:
-        weight = unpack_int(weight, weights_dtype, quantized_weight_shape, dtype=torch.int8).t_()
+        weight = unpack_int(weight, weights_dtype, quantized_weight_shape, dtype=torch.int8)
+        if codebook is not None: # codebook dtypes unpack to indices; gather the int8 levels before the GEMM
+            weight = codebook[weight.to(dtype=torch.int32)]
+        weight = weight.t_()
         scale = scale.t()
         if zero_point is not None:
             zero_point = zero_point.t()
@@ -82,6 +86,7 @@ def int8_matmul(
     svd_up: torch.FloatTensor | None = None,
     svd_down: torch.FloatTensor | None = None,
     zero_point: torch.FloatTensor | None = None,
+    codebook: torch.CharTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     quantized_weight_shape: torch.Size | None = None,
     weights_dtype: str | None = None,
@@ -92,6 +97,7 @@ def int8_matmul(
         svd_up=svd_up,
         svd_down=svd_down,
         zero_point=zero_point,
+        codebook=codebook,
         hadamard=hadamard,
         quantized_weight_shape=quantized_weight_shape,
         weights_dtype=weights_dtype,
@@ -102,9 +108,9 @@ def int8_matmul(
 @inference_context()
 def quantized_linear_forward_int8_matmul(self, input: torch.FloatTensor) -> torch.FloatTensor:
     if torch.numel(input) / input.shape[-1] < 32:
-        return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, skip_quantized_matmul=True), self.bias)
+        return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, codebook=self.codebook, skip_quantized_matmul=True), self.bias)
     if self.sdnq_dequantizer.re_quantize_for_matmul:
-        weight, scale = self.sdnq_dequantizer.re_quantize_matmul(self.weight, self.scale, zero_point=self.zero_point)
+        weight, scale = self.sdnq_dequantizer.re_quantize_matmul(self.weight, self.scale, zero_point=self.zero_point, codebook=self.codebook)
         quantized_weight_shape = None
         zero_point = None
     else:
@@ -121,6 +127,7 @@ def quantized_linear_forward_int8_matmul(self, input: torch.FloatTensor) -> torc
         svd_up=self.svd_up,
         svd_down=self.svd_down,
         zero_point=zero_point,
+        codebook=self.codebook,
         hadamard=hadamard,
         quantized_weight_shape=quantized_weight_shape,
         weights_dtype=self.sdnq_dequantizer.weights_dtype,

@@ -140,6 +140,7 @@ def dequantize_weight(
     svd_down: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     use_codebook: bool = False,
+    codebook: torch.CharTensor | None = None,
     group_size: int = -1,
     dtype: torch.dtype | None = None,
     result_shape: torch.Size | None = None,
@@ -148,6 +149,10 @@ def dequantize_weight(
     re_quantize_for_matmul: bool = False,
     layer_class_name: str = "Linear",
 ) -> torch.FloatTensor:
+    if dtype_dict[weights_dtype].get("is_codebook", False):
+        weight = unpack_int(weight, weights_dtype, quantized_weight_shape)
+        weight = codebook[weight.to(dtype=torch.int32)]
+        return dequantize_symmetric(weight, scale, svd_up=svd_up, svd_down=svd_down, hadamard=hadamard, dtype=dtype, result_shape=result_shape, skip_quantized_matmul=skip_quantized_matmul, re_quantize_for_matmul=re_quantize_for_matmul)
     if dtype_dict[weights_dtype]["is_packed"]:
         if dtype_dict[weights_dtype]["is_integer"]:
             weight = unpack_int(weight, weights_dtype, quantized_weight_shape, dtype=scale.dtype if not use_codebook else torch.int32)
@@ -209,6 +214,7 @@ def re_quantize_matmul(
     svd_down: torch.FloatTensor | None = None,
     hadamard: torch.FloatTensor | None = None,
     use_codebook: bool = False,
+    codebook: torch.CharTensor | None = None,
     group_size: int = -1,
     matmul_dtype: str = "int8",
     result_shape: torch.Size | None = None,
@@ -223,6 +229,7 @@ def re_quantize_matmul(
         svd_down=svd_down,
         hadamard=hadamard,
         use_codebook=use_codebook,
+        codebook=codebook,
         group_size=group_size,
         dtype=scale.dtype,
         result_shape=result_shape,
@@ -356,6 +363,7 @@ class SDNQDequantizer:
         zero_point: torch.FloatTensor | None = None,
         svd_up: torch.FloatTensor | None = None,
         svd_down: torch.FloatTensor | None = None,
+        codebook: torch.CharTensor | None = None,
         hadamard: torch.FloatTensor | None = None,
         non_hadamard: bool = True,
         skip_compile: bool = False,
@@ -377,6 +385,7 @@ class SDNQDequantizer:
             svd_down=svd_down,
             hadamard=hadamard,
             use_codebook=self.use_codebook,
+            codebook=codebook,
             group_size=self.group_size,
             matmul_dtype=self.quantized_matmul_dtype,
             result_shape=self.result_shape,
@@ -392,6 +401,7 @@ class SDNQDequantizer:
         zero_point: torch.FloatTensor | None = None,
         svd_up: torch.FloatTensor | None = None,
         svd_down: torch.FloatTensor | None = None,
+        codebook: torch.CharTensor | None = None,
         hadamard: torch.FloatTensor | None = None,
         skip_quantized_matmul: bool = False,
         non_hadamard: bool = False,
@@ -418,6 +428,7 @@ class SDNQDequantizer:
             svd_down=svd_down,
             hadamard=hadamard,
             use_codebook=self.use_codebook,
+            codebook=codebook,
             group_size=self.group_size,
             result_shape=self.result_shape,
             quantized_weight_shape=self.quantized_weight_shape,

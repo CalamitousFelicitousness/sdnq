@@ -7,6 +7,7 @@ import torch
 from .common import (
     logger,
     sdnq_keys,
+    sdnq_float_keys,
     dtype_dict,
     accepted_weight_dtypes,
     accepted_matmul_dtypes,
@@ -23,6 +24,7 @@ from .common import (
 from .quant_utils import (
     quantize_weight,
     quantize_weight_codebook,
+    quantize_weight_shared_codebook,
     apply_svdquant,
     apply_hadamard,
     prepare_weight_for_matmul,
@@ -124,9 +126,11 @@ def sdnq_quantize_layer_weight(
     if torch_dtype is None:
         torch_dtype = weight.dtype
     quantized_matmul_dtype = get_quantized_matmul_dtype(weights_dtype, quantized_matmul_dtype)
+    is_codebook = dtype_dict[weights_dtype].get("is_codebook", False)
 
     re_quantize_for_matmul = bool(
         use_codebook
+        or (is_codebook and quantized_matmul_dtype != "int8") # the int8 book feeds the int8 kernels only
         or dtype_dict[weights_dtype]["num_bits"] > dtype_dict[quantized_matmul_dtype]["num_bits"]
         or dtype_dict[weights_dtype]["is_integer"] != dtype_dict[quantized_matmul_dtype]["is_integer"]
         or (dtype_dict[weights_dtype]["is_unsigned"] and not dtype_dict[quantized_matmul_dtype]["is_integer"])
@@ -146,7 +150,7 @@ def sdnq_quantize_layer_weight(
         reduction_axes = 1
         output_channel_size, channel_size = weight.shape[:2]
         use_quantized_matmul = check_quantized_matmul_is_allowed(use_quantized_matmul, output_channel_size, channel_size)
-        if use_quantized_matmul and not re_quantize_for_matmul and not dtype_dict[weights_dtype]["is_packed"]:
+        if use_quantized_matmul and not re_quantize_for_matmul and (not dtype_dict[weights_dtype]["is_packed"] or is_codebook): # packed codebook convs must flatten or the matmul kernels hit a >2D transpose
             result_shape = weight.shape
             weight = weight.flatten(1,-1)
             reduction_axes = -1
@@ -195,7 +199,7 @@ def sdnq_quantize_layer_weight(
         svd_up, svd_down = None, None
 
     if group_size == 0:
-        if use_quantized_matmul and not re_quantize_for_matmul and dtype_dict[weights_dtype]["num_bits"] >= 6:
+        if dtype_dict[weights_dtype]["num_bits"] >= 6 and (is_codebook or (use_quantized_matmul and not re_quantize_for_matmul)):
             group_size = -1
         else:
             group_size_pow2 = 1 + dtype_dict[weights_dtype]["num_bits"]
@@ -205,6 +209,8 @@ def sdnq_quantize_layer_weight(
                 group_size_pow2 += 1
             if use_codebook:
                 group_size_pow2 += 3
+            elif is_codebook:
+                group_size_pow2 -= 1 # zero_point-free storage buys groups half the affine size at equal bytes
             group_size = 2 ** group_size_pow2
 
     if group_size > 0:
@@ -254,7 +260,11 @@ def sdnq_quantize_layer_weight(
         if not use_tensorwise_fp8_matmul and not dtype_dict[quantized_matmul_dtype]["is_integer"]:
             cast_scale = False
 
-    if use_codebook:
+    codebook = None
+    if is_codebook:
+        weight, scale, codebook = quantize_weight_shared_codebook(weight, reduction_axes, weights_dtype, dtype=(scale_dtype if cast_scale else None), steps=codebook_steps)
+        zero_point = None
+    elif use_codebook:
         weight, scale = quantize_weight_codebook(weight, reduction_axes, weights_dtype, dtype=(scale_dtype if cast_scale else None), steps=codebook_steps)
         zero_point = None
     else:
@@ -297,7 +307,7 @@ def sdnq_quantize_layer_weight(
         layer_class_name=layer_class_name,
     )
 
-    return (sdnq_dequantizer, {"weight": weight, "scale": scale, "zero_point": zero_point, "svd_up": svd_up, "svd_down": svd_down})
+    return (sdnq_dequantizer, {"weight": weight, "scale": scale, "zero_point": zero_point, "svd_up": svd_up, "svd_down": svd_down, "codebook": codebook})
 
 
 @inference_context()
@@ -356,6 +366,8 @@ def sdnq_quantize_layer_weight_dynamic(
     quantization_loss = None
     for i in range(weights_dtype_order.index(weights_dtype), len(weights_dtype_order)):
         current_weights_dtype = weights_dtype_order[i]
+        if dtype_dict[current_weights_dtype].get("is_codebook", False) and not dtype_dict[weights_dtype].get("is_codebook", False):
+            continue # codebook rungs are opt-in: only walked when the requested dtype is itself a codebook type
         if use_codebook and not (dtype_dict[current_weights_dtype]["is_unsigned"] and dtype_dict[current_weights_dtype]["is_integer"]):
             continue
         add_param_to_not_use_matmul = False
@@ -417,6 +429,7 @@ def sdnq_quantize_layer_weight_dynamic(
                 zero_point=weight_data["zero_point"],
                 svd_up=weight_data["svd_up"],
                 svd_down=weight_data["svd_down"],
+                codebook=weight_data.get("codebook"),
                 skip_quantized_matmul=sdnq_dequantizer.use_quantized_matmul,
                 dtype=weight.dtype,
                 skip_compile=True,
@@ -693,9 +706,9 @@ class SDNQQuantizer(DiffusersQuantizer, HfQuantizer):
 
         if self.pre_quantized:
             if param_value is not None:
-                if tensor_name == "weight":
+                if tensor_name in {"weight", "codebook"}: # both keep their stored dtype
                     return_dtype = param_value.dtype
-                elif self.quantization_config.dequantize_fp32 and tensor_name in sdnq_keys:
+                elif self.quantization_config.dequantize_fp32 and tensor_name in sdnq_float_keys:
                     if torch.float64 not in {param_value.dtype, self.torch_dtype}:
                         return_dtype = torch.float32
                     else:
@@ -1046,6 +1059,11 @@ class SDNQConfig(QuantizationConfigMixin):
             raise ValueError(f"SDNQ only support quantized matmul dtypes in {accepted_matmul_dtypes} but found {self.quantized_matmul_dtype}")
         if self.use_codebook and not (self.is_integer and self.is_unsigned):
             raise ValueError(f"SDNQ: use_codebook is only supported with unsigned integer dtypes but found {self.weights_dtype}")
+        if dtype_dict[self.weights_dtype].get("is_codebook", False):
+            if self.use_codebook:
+                raise ValueError(f"SDNQ: use_codebook can not be combined with the codebook dtype {self.weights_dtype}")
+            if self.is_training:
+                raise ValueError(f"SDNQ: codebook dtype {self.weights_dtype} is inference only and not supported for training")
 
         if self.modules_to_not_convert is None:
             self.modules_to_not_convert = []

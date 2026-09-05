@@ -104,9 +104,9 @@ def uint8_matmul(
 @inference_context()
 def quantized_linear_forward_uint8_matmul(self, input: torch.FloatTensor) -> torch.FloatTensor:
     if torch.numel(input) / input.shape[-1] < 32:
-        return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, skip_quantized_matmul=True), self.bias)
+        return torch.nn.functional.linear(input, self.sdnq_dequantizer(self.weight, self.scale, zero_point=self.zero_point, svd_up=self.svd_up, svd_down=self.svd_down, codebook=self.codebook, skip_quantized_matmul=True), self.bias)
     if self.sdnq_dequantizer.re_quantize_for_matmul:
-        weight, scale, zero_point = self.sdnq_dequantizer.re_quantize_matmul(self.weight, self.scale, zero_point=self.zero_point)
+        weight, scale, zero_point = self.sdnq_dequantizer.re_quantize_matmul(self.weight, self.scale, zero_point=self.zero_point, codebook=self.codebook)
         quantized_weight_shape = None
     else:
         weight, scale, zero_point = self.weight, self.scale, self.zero_point
