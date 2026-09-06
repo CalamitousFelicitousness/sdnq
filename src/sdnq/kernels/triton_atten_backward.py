@@ -6,7 +6,7 @@ from torch.library import triton_op, wrap_triton
 import triton
 import triton.language as tl
 
-from ..common import compile_func, inference_context
+from ..common import compile_func, inference_context, set_triton_allocator
 from ..quant_utils import quantize_int_mm, quantize_fp_mm, get_hadamard, rotate_hadamard, rotate_hadamard_compiled
 from .triton_atten import sdnq_triton_atten, autotune_configs, block_size_divisor, prune_configs, block_count_chunk, block_index_chunk, get_block_mask_input, check_block_lists
 
@@ -602,6 +602,7 @@ def sdnq_triton_atten_bwd_dq(
     def grid_dq(META):
         return (triton.cdiv(QN, META["BLOCK_SIZE_M"]), QH, QZ)
     dq = torch.empty_like(query, dtype=out_dtype)
+    set_triton_allocator()
     wrap_triton(sdnq_attn_bwd_dq_kernel)[grid_dq](
         query, key, value, grad_output,
         query_scale, key_scale, value_scale, grad_output_scale,
@@ -661,6 +662,7 @@ def sdnq_atten_bwd_dkv(
         return (triton.cdiv(KN, META["BLOCK_SIZE_N"]), KH, QZ)
     dk = torch.empty_like(key, dtype=out_dtype) if do_grad_k else None
     dv = torch.empty_like(value, dtype=out_dtype) if do_grad_v else None
+    set_triton_allocator()
     wrap_triton(sdnq_attn_bwd_dkv_kernel)[grid_dkv](
         query, key, value, grad_output,
         query_scale, key_scale, value_scale, grad_output_scale,

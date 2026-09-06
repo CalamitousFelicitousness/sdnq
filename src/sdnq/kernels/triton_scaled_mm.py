@@ -7,7 +7,7 @@ from torch.library import triton_op, wrap_triton
 import triton
 import triton.language as tl
 
-from ..common import logger, torch_backend, inference_context
+from ..common import logger, torch_backend, inference_context, set_triton_allocator
 from ..utils import get_cache_sizes
 
 
@@ -261,6 +261,7 @@ def sdnq_scaled_mm(
     c = torch.empty((M, N), device=a.device, dtype=out_dtype)
     def grid(META):
         return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
+    set_triton_allocator()
     wrap_triton(sdnq_scaled_mm_kernel)[grid](
         a, b, c, bias,
         scale_a, scale_b,

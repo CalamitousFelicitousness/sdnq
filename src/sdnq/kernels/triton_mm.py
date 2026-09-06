@@ -6,7 +6,7 @@ from torch.library import triton_op, wrap_triton
 import triton
 import triton.language as tl
 
-from ..common import inference_context
+from ..common import inference_context, set_triton_allocator
 from .triton_scaled_mm import block_size_divisor, autotune_configs, prune_configs, USE_FP16_ACCUM
 
 
@@ -138,6 +138,7 @@ def sdnq_triton_mm(
     c = torch.empty((M, N), device=a.device, dtype=out_dtype)
     def grid(META):
         return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
+    set_triton_allocator()
     wrap_triton(sdnq_triton_mm_kernel)[grid](
         a, b, c, bias,
         M, N, K,

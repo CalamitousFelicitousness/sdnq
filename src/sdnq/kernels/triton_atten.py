@@ -7,7 +7,7 @@ from torch.library import triton_op, wrap_triton
 import triton
 import triton.language as tl
 
-from ..common import logger, torch_backend, compile_func, inference_context
+from ..common import logger, torch_backend, compile_func, inference_context, set_triton_allocator
 from ..quant_utils import quantize_int_mm, quantize_fp_mm, apply_hadamard, get_hadamard, get_hadamard_group_size, rotate_hadamard, rotate_hadamard_compiled
 from ..utils import is_pow2, next_power_of_2, get_cache_sizes
 
@@ -428,6 +428,7 @@ def sdnq_atten_fwd(
         return (triton.cdiv(QN, META["BLOCK_SIZE_M"]), QH, QZ)
     out = torch.empty((QZ, QH, QN, VHD), dtype=out_dtype, device=query.device)
     lse = torch.empty((QZ, QH, QN), dtype=out_dtype, device=query.device) if return_lse else None
+    set_triton_allocator()
     wrap_triton(sdnq_attn_kernel)[grid](
         query, key, value,
         query_scale, key_scale, value_scale,

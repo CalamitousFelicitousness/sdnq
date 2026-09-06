@@ -480,6 +480,16 @@ common_skip_keys = (
 )
 
 
+def triton_scratch(size: int, alignment: int, stream: int | None) -> torch.Tensor: # pylint: disable=unused-argument
+    return torch.empty(size, dtype=torch.int8, device=torch_device.type)
+
+
+def set_triton_allocator() -> None:
+    """Install the scratch allocator in the current context. Triton keeps it per context, and tensor descriptor kernels need one on Hopper and newer."""
+    import triton
+    triton.set_allocator(triton_scratch)
+
+
 # modules_to_not_convert: ["x_embedder", "y_embedder"]
 # modules_dtype_dict: {"minimum_6bit": ["x_embedder", "y_embedder"]}
 # modules_to_not_use_matmul: {"int8": ["x_embedder", "y_embedder"], "float8_e4m3fn": ["x_embedder", "y_embedder"]}
